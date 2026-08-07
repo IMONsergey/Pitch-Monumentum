@@ -2,45 +2,47 @@ export function workspaceHtml(): string {
   return `<!doctype html>
 <html lang="en">
 <head>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Pitch Monumentum</title>
-<style>
-:root{--bg:#090b0e;--panel:#111419;--panel2:#171b21;--line:#282e37;--line2:#333b47;--text:#f3f5f7;--muted:#8c96a5;--accent:#c7ff5e;--danger:#ff6b6b;--blue:#78a9ff}*{box-sizing:border-box}html,body{height:100%}body{margin:0;background:var(--bg);color:var(--text);font:13px/1.4 Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;overflow:hidden}button,input,textarea,select{font:inherit}.app{height:100vh;display:grid;grid-template-rows:56px 1fr 42px}.top{display:flex;align-items:center;gap:11px;border-bottom:1px solid var(--line);padding:0 16px;background:#0d1014}.brand{font-weight:760;letter-spacing:-.025em;font-size:14px}.project{color:var(--muted);max-width:280px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.spacer{flex:1}.pill{border:1px solid var(--line);border-radius:999px;padding:5px 9px;color:var(--muted);background:#0e1115}.branch-select{border:1px solid var(--line);background:#0e1115;color:var(--text);border-radius:8px;padding:7px 28px 7px 9px}.primary{background:var(--accent);color:#090b0e;border:0;border-radius:8px;padding:8px 12px;font-weight:740;cursor:pointer}.action{border:1px solid var(--line);background:var(--panel2);color:var(--text);padding:8px 10px;border-radius:8px;cursor:pointer}.primary:hover,.action:hover{filter:brightness(1.06)}.shell{min-height:0;display:grid;grid-template-columns:244px minmax(420px,1fr) 320px}.left,.right{background:var(--panel);min-height:0;overflow:auto}.left{border-right:1px solid var(--line)}.right{border-left:1px solid var(--line)}.tabs{display:flex;padding:10px;gap:5px;border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--panel);z-index:3}.tab{border:0;background:transparent;color:var(--muted);padding:6px 8px;border-radius:7px;cursor:pointer}.tab.active{background:var(--panel2);color:var(--text)}.slides{padding:10px}.thumb{border:1px solid var(--line);border-radius:10px;padding:9px;margin-bottom:8px;cursor:pointer;background:#0e1115}.thumb:hover{border-color:var(--line2)}.thumb.active{border-color:var(--accent);box-shadow:inset 0 0 0 1px #c7ff5e22}.thumb .n{color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.04em}.thumb .t{margin-top:4px;font-size:12px}.center{min-width:0;min-height:0;overflow:auto;background:radial-gradient(circle at 50% 3%,#202630 0,#0d1014 48%,#080a0d 100%);padding:42px 34px 70px;display:flex;justify-content:center;align-items:flex-start}.canvas-stack{width:min(1160px,100%);display:grid;gap:10px}.canvas-meta{display:flex;align-items:center;color:var(--muted);font-size:11px}.stage{width:100%;aspect-ratio:16/9;position:relative;background:#fff;box-shadow:0 28px 110px #000c;overflow:hidden;flex:0 0 auto}.scene{position:absolute;left:0;top:0;width:1920px;height:1080px;transform-origin:0 0;will-change:transform}.el{position:absolute;user-select:none}.el.selectable{cursor:pointer}.el.selected{outline:3px solid var(--blue);outline-offset:3px}.text-el{overflow:hidden;white-space:normal}.right h3{font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:var(--muted);margin:0 0 10px}.section{padding:16px;border-bottom:1px solid var(--line)}.section p{margin:7px 0}.field{margin:9px 0}.field label{display:block;color:var(--muted);font-size:10px;margin-bottom:5px;text-transform:uppercase;letter-spacing:.04em}.field input,.field textarea{width:100%;background:#0b0e12;border:1px solid var(--line);color:var(--text);border-radius:7px;padding:8px;outline:none}.field input:focus,.field textarea:focus{border-color:#4d6078}.field textarea{resize:vertical}.row{display:grid;grid-template-columns:1fr 1fr;gap:7px}.full{width:100%}.issue{padding:10px 0;border-bottom:1px solid var(--line)}.issue:last-child{border:0}.issue .sev{font-size:9px;text-transform:uppercase;letter-spacing:.06em}.sev.critical,.sev.major{color:var(--danger)}.story-card{padding:11px;border:1px solid var(--line);border-radius:9px;margin:8px 0;cursor:pointer}.story-card.active{border-color:var(--accent)}.story-card b{display:block;font-size:12px}.story-card span{display:block;color:var(--muted);margin-top:5px;font-size:11px}.bottom{border-top:1px solid var(--line);background:#0d1014;display:flex;align-items:center;padding:0 14px;color:var(--muted);gap:12px;font-size:11px}.status-dot{width:7px;height:7px;border-radius:50%;background:var(--accent);box-shadow:0 0 14px #c7ff5e66}.empty{color:var(--muted);padding:14px}.tag{display:inline-block;border:1px solid var(--line);border-radius:999px;padding:4px 7px;margin:2px 3px 2px 0;color:var(--muted);font-size:10px}.selection-name{font-size:14px;font-weight:650}.muted{color:var(--muted)}
-@media(max-width:980px){.shell{grid-template-columns:190px minmax(360px,1fr) 270px}.center{padding:28px 20px}.project{display:none}}@media(max-width:760px){.shell{grid-template-columns:1fr}.left,.right{display:none}.center{padding:20px}.top .action,.top .pill{display:none}}
-</style></head>
-<body><div class="app">
-<header class="top"><div class="brand">Pitch Monumentum</div><div id="projectName" class="project">—</div><select id="branchSelect" class="branch-select" title="Active branch"></select><div class="spacer"></div><div id="quality" class="pill">QA —</div><button id="forkBtn" class="action">Fork</button><button id="exportBtn" class="primary">Export PPTX</button></header>
-<div class="shell"><aside class="left"><div class="tabs"><button class="tab active" data-view="slides">Slides</button><button class="tab" data-view="story">Story</button><button class="tab" data-view="critique">Critique</button></div><div id="leftContent"></div></aside><main class="center"><div class="canvas-stack"><div class="canvas-meta"><span id="canvasLabel">—</span><span class="spacer"></span><span>1920 × 1080 DU</span></div><div id="stage" class="stage"><div id="scene" class="scene"></div></div></div></main><aside class="right"><div id="inspector"></div></aside></div>
-<footer class="bottom"><span class="status-dot"></span><span id="activity">PitchOS ready</span><span class="spacer"></span><span>Object-level edits · branch-safe artifacts · native PPTX</span></footer>
-</div>
-<script>
-const state={project:null,slideId:null,elementId:null,view:'slides',scale:1};
-const $=s=>document.querySelector(s);const esc=s=>String(s??'').replace(/[&<>\"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;'}[c]));
-async function api(path,opts={}){const r=await fetch(path,{headers:{'content-type':'application/json'},...opts});const data=await r.json();if(!r.ok)throw new Error(data.error||r.statusText);return data;}
-function currentSlide(){return state.project?.deck.slides.find(s=>s.id===state.slideId)||state.project?.deck.slides[0]}
-function currentElement(){return currentSlide()?.scene.find(e=>e.id===state.elementId)}
-function syncScale(){const stage=$('#stage'),scene=$('#scene');if(!stage||!scene)return;state.scale=stage.clientWidth/1920;scene.style.transform='scale('+state.scale+')'}
-function styleGeom(e){const g=e.geometry;return \`left:\${g.x}px;top:\${g.y}px;width:\${g.width}px;height:\${g.height}px;z-index:\${e.zIndex};opacity:\${e.opacity??1};transform:rotate(\${g.rotation||0}deg)\`}
-function textRunStyle(r){return \`font-family:\${esc(r.fontFamily||'inherit')};font-size:\${(r.fontSizePt||18)*96/72}px;color:\${esc(r.color||'#111')};font-weight:\${r.bold?700:400};font-style:\${r.italic?'italic':'normal'};\${r.underline?'text-decoration:underline;':''}\`}
-function renderElement(e){const cls=\`el selectable \${e.id===state.elementId?'selected':''}\`;if(e.type==='text'){const body=e.paragraphs.map(p=>\`<div style="text-align:\${esc(p.align||'left')};line-height:\${p.lineSpacing||1.2}">\`+p.runs.map(r=>\`<span style="\${textRunStyle(r)}">\${esc(r.text)}</span>\`).join('')+'</div>').join('');return \`<div class="\${cls} text-el" data-id="\${esc(e.id)}" style="\${styleGeom(e)}">\${body}</div>\`}if(e.type==='shape')return \`<div class="\${cls}" data-id="\${esc(e.id)}" style="\${styleGeom(e)};background:\${esc(e.fill||'transparent')};border:\${e.stroke?Math.max(1,e.stroke.widthDU)+'px solid '+esc(e.stroke.color):'none'};border-radius:\${e.shape==='ellipse'?'50%':(e.radiusDU||0)+'px'}"></div>\`;if(e.type==='line'){const angle=Math.atan2((e.end?.[1]||0)-(e.start?.[1]||0),(e.end?.[0]||0)-(e.start?.[0]||0))*180/Math.PI;return \`<div class="\${cls}" data-id="\${esc(e.id)}" style="\${styleGeom(e)};height:0;border-top:\${Math.max(1,e.stroke.widthDU)}px solid \${esc(e.stroke.color)};transform:rotate(\${Number.isFinite(angle)?angle:(e.geometry.rotation||0)}deg);transform-origin:0 0"></div>\`}return \`<div class="\${cls}" data-id="\${esc(e.id)}" style="\${styleGeom(e)};border:1px dashed #777;color:#777;font:22px system-ui;padding:10px">\${esc(e.type)}</div>\`}
-function renderCanvas(){const slide=currentSlide();if(!slide)return;$('#canvasLabel').textContent=(slide.order+1)+' / '+state.project.deck.slides.length+' · '+slide.title;$('#scene').innerHTML=slide.scene.slice().sort((a,b)=>a.zIndex-b.zIndex).map(renderElement).join('');document.querySelectorAll('.selectable').forEach(el=>el.addEventListener('click',ev=>{ev.stopPropagation();state.elementId=el.dataset.id;renderCanvas();renderInspector()}));$('#scene').onclick=()=>{state.elementId=null;renderCanvas();renderInspector()};syncScale()}
-function slidesView(){const deck=state.project.deck;return \`<div class="slides">\${deck.slides.map((s,i)=>\`<div class="thumb \${s.id===currentSlide()?.id?'active':''}" data-slide="\${esc(s.id)}"><div class="n">\${String(i+1).padStart(2,'0')} · \${esc(s.archetype)}</div><div class="t">\${esc(s.title)}</div></div>\`).join('')}</div>\`}
-function storyView(){return \`<div class="slides">\${state.project.deck.slides.map((s,i)=>\`<div class="story-card \${s.id===currentSlide()?.id?'active':''}" data-slide="\${esc(s.id)}"><b>\${i+1}. \${esc(s.semantic.takeaway)}</b><span>\${esc(s.semantic.purpose)}</span></div>\`).join('')}</div>\`}
-function critiqueView(){const issues=state.project.qa||[];return issues.length?\`<div class="slides">\${issues.map(i=>\`<div class="issue"><div class="sev \${esc(i.severity)}">\${esc(i.severity)} · \${esc(i.category)}</div><div>\${esc(i.message)}</div></div>\`).join('')}</div>\`:'<div class="empty">No deterministic QA issues.</div>'}
-function renderLeft(){const c=$('#leftContent');c.innerHTML=state.view==='story'?storyView():state.view==='critique'?critiqueView():slidesView();c.querySelectorAll('[data-slide]').forEach(el=>el.onclick=()=>{state.slideId=el.dataset.slide;state.elementId=null;renderAll()})}
-function textValue(e){return e?.type==='text'?e.paragraphs.map(p=>p.runs.map(r=>r.text).join('')).join('\n'):''}
-function renderInspector(){const e=currentElement(),s=currentSlide();if(!s){$('#inspector').innerHTML='';return}if(!e){$('#inspector').innerHTML=\`<div class="section"><h3>Slide contract</h3><div class="selection-name">\${esc(s.semantic.takeaway)}</div><p class="muted">\${esc(s.semantic.purpose)}</p><div class="field"><label>Archetype</label><input disabled value="\${esc(s.archetype)}"></div><div class="field"><label>Claims</label><textarea disabled>\${esc((s.semantic.claimIds||[]).join('\n'))}</textarea></div><div class="field"><label>Evidence</label><textarea disabled>\${esc((s.semantic.evidenceRefs||[]).join('\n'))}</textarea></div></div>\`;return}
-const g=e.geometry;$('#inspector').innerHTML=\`<div class="section"><h3>Selection</h3><div class="selection-name">\${esc(e.name||e.id)}</div><div class="muted" style="margin-top:4px">\${esc(e.type)} · \${esc(e.semanticRole)} · \${esc(e.exportStrategy)}</div></div>\${e.type==='text'?\`<div class="section"><h3>Content</h3><div class="field"><textarea id="textEdit" rows="5">\${esc(textValue(e))}</textarea></div><button class="action full" id="applyText">Apply text</button></div>\`:''}<div class="section"><h3>Geometry · DU</h3><div class="row">\${['x','y','width','height'].map(k=>\`<div class="field"><label>\${k}</label><input id="g_\${k}" type="number" value="\${g[k]}"></div>\`).join('')}</div><button class="action full" id="applyGeom">Apply geometry</button></div><div class="section"><h3>Dependencies</h3>\${e.dependencies?.length?e.dependencies.map(d=>\`<span class="tag">\${esc(d.kind)}:\${esc(d.id)}</span>\`).join(''):'<div class="muted">None</div>'}</div>\`;
-if($('#applyText'))$('#applyText').onclick=()=>mutate([{op:'replaceText',slideId:s.id,elementId:e.id,paragraphs:[{runs:[{...e.paragraphs?.[0]?.runs?.[0],text:$('#textEdit').value}]}]}],'Edit selected text');$('#applyGeom').onclick=()=>mutate([{op:'updateGeometry',slideId:s.id,elementId:e.id,geometry:Object.fromEntries(['x','y','width','height'].map(k=>[k,Number($('#g_'+k).value)]))}],'Edit selected geometry')}
-async function mutate(operations,reason){try{$('#activity').textContent='Applying scoped patch…';const result=await api('/api/mutate',{method:'POST',body:JSON.stringify({reason,operations,expectedDeckHash:state.project.deckHash})});state.project=result;renderAll();$('#activity').textContent='Patch applied · affected QA recalculated'}catch(e){$('#activity').textContent='Patch failed: '+e.message}}
-function renderBranches(){const select=$('#branchSelect'),active=state.project.manifest.activeBranchId;select.innerHTML=Object.values(state.project.manifest.branches).map(b=>\`<option value="\${esc(b.id)}" \${b.id===active?'selected':''}>\${esc(b.name)}</option>\`).join('')}
-async function load(){state.project=await api('/api/project');state.slideId=state.project.deck.slides[0]?.id;renderAll()}
-function renderAll(){$('#projectName').textContent=state.project.manifest.name;renderBranches();const critical=state.project.qa.filter(i=>i.severity==='critical').length;$('#quality').textContent=\`QA \${critical?'blocked':'clean'} · \${state.project.qa.length}\`;renderLeft();renderCanvas();renderInspector()}
-document.querySelectorAll('.tab').forEach(t=>t.onclick=()=>{document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));t.classList.add('active');state.view=t.dataset.view;renderLeft()});
-$('#branchSelect').onchange=async()=>{try{state.project=await api('/api/checkout',{method:'POST',body:JSON.stringify({branchId:$('#branchSelect').value})});state.slideId=state.project.deck.slides[0]?.id;state.elementId=null;renderAll();$('#activity').textContent='Checked out branch '+$('#branchSelect').selectedOptions[0].textContent}catch(e){$('#activity').textContent='Checkout failed: '+e.message}};
-$('#forkBtn').onclick=async()=>{const name=prompt('Branch name','Alternative');if(!name)return;state.project=await api('/api/branch',{method:'POST',body:JSON.stringify({name})});state.slideId=state.project.deck.slides[0]?.id;state.elementId=null;renderAll();$('#activity').textContent='Forked branch '+name};
-$('#exportBtn').onclick=async()=>{try{$('#activity').textContent='Compiling native PowerPoint…';const r=await api('/api/export',{method:'POST',body:'{}'});$('#activity').textContent='PPTX exported: '+r.path}catch(e){$('#activity').textContent='Export failed: '+e.message}};
-new ResizeObserver(syncScale).observe($('#stage'));
-load().catch(e=>{$('#activity').textContent='Workspace error: '+e.message});
-</script></body></html>`;
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Pitch Monumentum</title>
+  <link rel="stylesheet" href="/workspace.css">
+</head>
+<body>
+  <div class="app">
+    <header class="top">
+      <div class="brand">Pitch Monumentum</div>
+      <div id="projectName" class="project">—</div>
+      <select id="branchSelect" class="branch-select" title="Active branch"></select>
+      <div class="spacer"></div>
+      <div id="quality" class="pill">QA —</div>
+      <button id="undoBtn" class="action" title="Undo on current branch">Undo</button>
+      <button id="redoBtn" class="action" title="Redo on current branch">Redo</button>
+      <button id="forkBtn" class="action">Fork</button>
+      <button id="exportBtn" class="primary">Export PPTX</button>
+    </header>
+    <div class="shell">
+      <aside class="left">
+        <div class="tabs">
+          <button class="tab active" data-view="slides">Slides</button>
+          <button class="tab" data-view="story">Story</button>
+          <button class="tab" data-view="critique">Critique</button>
+        </div>
+        <div id="leftContent"></div>
+      </aside>
+      <main class="center">
+        <div class="canvas-stack">
+          <div class="canvas-meta"><span id="canvasLabel">—</span><span class="spacer"></span><span>1920 × 1080 DU</span></div>
+          <div id="stage" class="stage"><div id="scene" class="scene"></div></div>
+        </div>
+      </main>
+      <aside class="right"><div id="inspector"></div></aside>
+    </div>
+    <footer class="bottom">
+      <span class="status-dot"></span><span id="activity">PitchOS ready</span><span class="spacer"></span>
+      <span>Object-level edits · branch-safe history · native PPTX</span>
+    </footer>
+  </div>
+  <script src="/workspace.js" defer></script>
+</body>
+</html>`;
 }
