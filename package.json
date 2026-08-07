@@ -1,0 +1,20 @@
+{
+  "name": "pitch-monumentum",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "AI-native presentation development environment powered by PitchOS",
+  "engines": {"node": ">=22"},
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "build": "tsc -p tsconfig.build.json",
+    "test": "npm run build && node --test dist/tests/*.test.js",
+    "check": "npm run typecheck && npm run test",
+    "demo": "npm run build && node dist/apps/cli/src/index.js demo .pitch-demo",
+    "status": "npm run build && node dist/apps/cli/src/index.js status .pitch-demo",
+    "serve": "npm run build && node dist/apps/demo/src/server.js .pitch-demo 4173"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.3"
+  }
+}
