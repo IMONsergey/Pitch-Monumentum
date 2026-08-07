@@ -1,0 +1,16 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { rm } from "node:fs/promises";
+import { ArtifactStore } from "../packages/artifact-store/src/index.js";
+import { PitchWorkspaceService } from "../apps/workspace/src/server.js";
+import type { DeckDocument } from "../packages/deck-model/src/index.js";
+
+const root="/tmp/pitchos-workspace-test";
+function deck():DeckDocument{return {schemaVersion:"0.1",id:"deck",title:"Workspace",canvas:{widthDU:1920,heightDU:1080,duPerInch:144,aspectRatio:"16:9"},briefId:"brief",narrativeId:"narrative",designSystemId:"design",slides:[{id:"s1",order:0,title:"Decision",archetype:"decision",semantic:{purpose:"Get approval",takeaway:"Approve phase two",questionAnswered:"What next?",narrativeRole:"decision",claimIds:[],evidenceRefs:[],audienceRelevance:"Board",density:"sparse"},scene:[{id:"t1",type:"text",semanticRole:"title",geometry:{x:120,y:140,width:1200,height:180},zIndex:1,origin:"agent",exportStrategy:"native",dependencies:[],paragraphs:[{runs:[{text:"Approve phase two",fontSizePt:44,bold:true,color:"#111111"}]}]}],status:"draft",qaIssueIds:[],dependencyIds:[]}],sourceIds:[],claimIds:[],activeBranchId:"branch_main",createdAt:"2026-08-07T00:00:00Z",updatedAt:"2026-08-07T00:00:00Z"};}
+async function setup(){await rm(root,{recursive:true,force:true});const store=new ArtifactStore(root);await store.init("Workspace test","workspace_project");await store.write({id:"deck",kind:"deck",payload:deck(),producer:{type:"deterministic"}});return new PitchWorkspaceService(root);}
+
+test("workspace mutation persists a new deck version and updates QA",async()=>{const service=await setup();const before=await service.state();const after=await service.mutate({expectedDeckHash:before.deckHash,reason:"Edit title",operations:[{op:"replaceText",slideId:"s1",elementId:"t1",paragraphs:[{runs:[{text:"Approve phase three",fontSizePt:44,bold:true,color:"#111111"}]}]}]});assert.equal((after.deck.slides[0].scene[0] as any).paragraphs[0].runs[0].text,"Approve phase three");const head=after.manifest.branches[after.manifest.activeBranchId].heads.deck;assert.equal(head.version,2);assert.ok(Object.values(after.manifest.branches[after.manifest.activeBranchId].heads).some(h=>h.kind==="qa"));});
+
+test("workspace branch edit remains isolated from main",async()=>{const service=await setup();const forked=await service.fork("CFO");const forkId=forked.manifest.activeBranchId;const after=await service.mutate({expectedDeckHash:forked.deckHash,reason:"CFO wording",operations:[{op:"replaceText",slideId:"s1",elementId:"t1",paragraphs:[{runs:[{text:"Protect margin first",fontSizePt:44,bold:true,color:"#111111"}]}]}]});assert.equal(after.manifest.activeBranchId,forkId);await service.checkout("branch_main");const main=await service.state();assert.equal((main.deck.slides[0].scene[0] as any).paragraphs[0].runs[0].text,"Approve phase two");await service.checkout(forkId);const cfo=await service.state();assert.equal((cfo.deck.slides[0].scene[0] as any).paragraphs[0].runs[0].text,"Protect margin first");});
+
+test("workspace exports the active branch to a real PPTX",async()=>{const service=await setup();const result=await service.exportPptx();assert.equal(result.result.slideCount,1);assert.equal(result.result.elementResults[0].strategy,"native");assert.match(result.path,/\.pptx$/);});
