@@ -4,6 +4,7 @@ import { ArtifactStore } from "../../../packages/artifact-store/src/index.js";
 import { propagateStale, type DependencyGraph } from "../../../packages/evidence/src/index.js";
 import { runDeterministicQA } from "../../../packages/qa/src/index.js";
 import { renderDeckHtml } from "../../../packages/renderer/src/index.js";
+import { compileDeckToPptx } from "../../../packages/pptx/src/index.js";
 import type { DeckDocument, PresentationBrief, NarrativeGraph, DesignSystem } from "../../../packages/deck-model/src/index.js";
 
 const args=process.argv.slice(2); const command=args[0]??"help";
@@ -16,18 +17,21 @@ async function demo(dirArg?:string){const dir=resolve(dirArg??".pitch-demo");con
   const b=await store.write({id:"brief_demo",kind:"brief",payload:brief,producer:{type:"deterministic"}}); const n=await store.write({id:"narrative_demo",kind:"narrative",payload:narrative,producer:{type:"deterministic"},inputs:[b]}); const d=await store.write({id:"design_demo",kind:"design",payload:design,producer:{type:"deterministic"},inputs:[b]}); const deck=demoDeck(now); const de=await store.write({id:"deck_demo",kind:"deck",payload:deck,producer:{type:"deterministic"},inputs:[n,d]});
   const issues=runDeterministicQA(deck); await store.write({id:"qa_demo",kind:"qa",payload:{deckId:deck.id,issues},producer:{type:"deterministic"},inputs:[de],status:issues.some(i=>i.severity==="critical")?"needsReview":"ready"});
   await mkdir(join(dir,"preview"),{recursive:true}); await writeFile(join(dir,"preview","deck.html"),renderDeckHtml(deck),"utf8");
+  await mkdir(join(dir,"exports"),{recursive:true}); const pptx=await compileDeckToPptx(deck,join(dir,"exports","deck.pptx"));
   const graph:DependencyGraph={nodes:[{id:"source_demo",kind:"source",status:"valid"},{id:"ev_demo",kind:"evidence",status:"valid"},{id:"claim_demo",kind:"claim",status:"valid"},{id:"slide_01",kind:"slide",status:"valid"}],edges:[{from:"source_demo",to:"ev_demo"},{from:"ev_demo",to:"claim_demo"},{from:"claim_demo",to:"slide_01"}]}; await writeFile(join(dir,".project","dependency-graph.json"),JSON.stringify(graph,null,2)+"\n","utf8");
-  console.log(JSON.stringify({project:manifest.projectId,directory:dir,preview:join(dir,"preview","deck.html"),qaIssues:issues.length,artifactCount:Object.keys((await store.readManifest()).artifacts).length},null,2));}
+  console.log(JSON.stringify({project:manifest.projectId,directory:dir,preview:join(dir,"preview","deck.html"),qaIssues:issues.length,pptx:join(dir,"exports","deck.pptx"),nativePptxObjects:pptx.elementResults.filter(x=>x.strategy==="native").length,artifactCount:Object.keys((await store.readManifest()).artifacts).length},null,2));}
 async function status(dirArg?:string){const dir=resolve(dirArg??".pitch-demo");const store=new ArtifactStore(dir);const manifest=await store.readManifest();console.log(JSON.stringify({projectId:manifest.projectId,name:manifest.name,activeBranchId:manifest.activeBranchId,branches:Object.values(manifest.branches),artifacts:manifest.artifacts},null,2));}
 async function qa(path?:string){if(!path)throw new Error("qa requires deck JSON path");const deck=await loadDeck(resolve(path));const issues=runDeterministicQA(deck);console.log(JSON.stringify(issues,null,2));if(issues.some(i=>i.severity==="critical"))process.exitCode=2;}
 async function render(input?:string,output?:string){if(!input||!output)throw new Error("render requires input deck JSON and output HTML");const deck=await loadDeck(resolve(input));await writeFile(resolve(output),renderDeckHtml(deck),"utf8");console.log(resolve(output));}
+async function pptx(input?:string,output?:string){if(!input||!output)throw new Error("pptx requires input deck JSON and output PPTX");const deck=await loadDeck(resolve(input));const result=await compileDeckToPptx(deck,resolve(output));console.log(JSON.stringify(result,null,2));if(result.elementResults.some(x=>x.strategy==="unsupported"))process.exitCode=3;}
 async function stale(dirArg?:string,changed="source_demo"){const dir=resolve(dirArg??".pitch-demo");const graph=JSON.parse(await readFile(join(dir,".project","dependency-graph.json"),"utf8")) as DependencyGraph;const next=propagateStale(graph,[changed]);await writeFile(join(dir,".project","dependency-graph.json"),JSON.stringify(next,null,2)+"\n","utf8");console.log(JSON.stringify(next,null,2));}
 async function main(){
   if(command==="demo")return demo(args[1]);
   if(command==="status")return status(args[1]);
   if(command==="qa")return qa(args[1]);
   if(command==="render")return render(args[1],args[2]);
+  if(command==="pptx")return pptx(args[1],args[2]);
   if(command==="stale")return stale(args[1],args[2]);
-  console.log(`PitchOS CLI\n  demo [dir]\n  status [dir]\n  qa <deck.json>\n  render <deck.json> <out.html>\n  stale [dir] [nodeId]`);
+  console.log(`PitchOS CLI\n  demo [dir]\n  status [dir]\n  qa <deck.json>\n  render <deck.json> <out.html>\n  pptx <deck.json> <out.pptx>\n  stale [dir] [nodeId]`);
 }
 main().catch((e)=>{console.error(e);process.exitCode=1;});
