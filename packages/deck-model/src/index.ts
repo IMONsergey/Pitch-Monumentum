@@ -16,6 +16,9 @@ export interface SourceLocator {
   fragment?: string;
   bbox?: [number, number, number, number];
   quoteHash?: string;
+  lineStart?: number;
+  lineEnd?: number;
+  part?: string;
 }
 
 export interface SourceDocument {

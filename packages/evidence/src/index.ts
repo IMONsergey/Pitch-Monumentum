@@ -26,3 +26,5 @@ export function propagateStale(graph: DependencyGraph, changedIds: string[]): De
 export function affectedSlides(graph: DependencyGraph, changedIds: string[]): string[] {
   const affected = descendants(graph, changedIds); return graph.nodes.filter((n) => n.kind === "slide" && affected.has(n.id)).map((n) => n.id);
 }
+
+export * from "./candidates.js";
