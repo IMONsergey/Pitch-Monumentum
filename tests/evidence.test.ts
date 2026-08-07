@@ -1,0 +1,3 @@
+import test from "node:test";import assert from "node:assert/strict";import { affectedSlides, propagateStale, type DependencyGraph } from "../packages/evidence/src/index.js";
+const g:DependencyGraph={nodes:[{id:"s1",kind:"source",status:"valid"},{id:"e1",kind:"evidence",status:"valid"},{id:"c1",kind:"claim",status:"valid"},{id:"sl1",kind:"slide",status:"valid"},{id:"sl2",kind:"slide",status:"valid"}],edges:[{from:"s1",to:"e1"},{from:"e1",to:"c1"},{from:"c1",to:"sl1"}]};
+test("source change only invalidates true descendants",()=>{assert.deepEqual(affectedSlides(g,["s1"]),["sl1"]);const n=propagateStale(g,["s1"]);assert.equal(n.nodes.find(x=>x.id==="sl1")?.status,"stale");assert.equal(n.nodes.find(x=>x.id==="sl2")?.status,"valid");});
