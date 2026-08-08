@@ -3,10 +3,10 @@ import type { ReviewCommand, ReviewDocument } from "../../../packages/review-eng
 import { emptyReviewDocument, executeReviewCommand, reviewApprovalViews, reviewSummary, reviewThreadViews, unresolvedBlockingThreads } from "../../../packages/review-engine/src/index.js";
 import { PitchWorkspaceService } from "../../workspace/src/server.js";
 
-export interface WorkspaceReviewCommand extends ReviewCommand {
+export type WorkspaceReviewCommand = ReviewCommand & {
   expectedDeckHash?: string;
   expectedReviewHash?: string;
-}
+};
 
 function headByKind(current: Awaited<ReturnType<PitchWorkspaceService["state"]>>, kind: string): BranchArtifactHead | undefined {
   return Object.values(current.manifest.branches[current.manifest.activeBranchId]?.heads ?? {}).find((head) => head.kind === kind);
@@ -43,7 +43,7 @@ export class ReviewWorkspaceRuntime {
     if (input.expectedReviewHash && input.expectedReviewHash !== reviewHead?.contentHash) throw new Error(`Review document changed since command was authored: expected ${input.expectedReviewHash}, got ${reviewHead?.contentHash ?? "<none>"}`);
     const baseline = reviewHead ? (await this.service.store.read<ReviewDocument>(reviewHead.id, reviewHead.version)).payload : emptyReviewDocument(current.deck);
     const { expectedDeckHash: _deck, expectedReviewHash: _review, ...command } = input as any;
-    const executed = executeReviewCommand(current.deck, baseline, command);
+    const executed = executeReviewCommand(current.deck, baseline, command as ReviewCommand);
     if (!executed.changed) return { ...(await this.state()), ...executed, commandReason: executed.reason };
 
     let activeHead = reviewHead;
@@ -55,7 +55,8 @@ export class ReviewWorkspaceRuntime {
     } else {
       await this.service.journal.record(current.manifest.activeBranchId, activeHead);
     }
-    const artifact = await this.service.store.write({ id: artifactId, kind: "review", payload: executed.document, producer: { type: command.author?.kind === "codex" ? "codex" : "user" }, inputs: activeHead ? [activeHead] : [] });
+    const producer = "author" in command && command.author?.kind === "codex" ? "codex" : "user";
+    const artifact = await this.service.store.write({ id: artifactId, kind: "review", payload: executed.document, producer: { type: producer }, inputs: [activeHead] });
     const nextHead: BranchArtifactHead = { id: artifact.id, kind: artifact.kind, version: artifact.version, contentHash: artifact.contentHash, status: artifact.status };
     await this.service.journal.record(current.manifest.activeBranchId, nextHead);
     return { ...(await this.state()), ...executed, commandReason: executed.reason };
