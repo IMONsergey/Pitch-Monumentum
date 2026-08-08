@@ -7,7 +7,8 @@
   "engines": {"node": ">=22"},
   "scripts": {
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "build": "tsc -p tsconfig.build.json",
+    "build:editor-spike": "esbuild apps/editor-spike/src/client.ts --bundle --format=iife --platform=browser --target=es2022 --outfile=apps/workspace/public/editor-spike.js",
+    "build": "tsc -p tsconfig.build.json && npm run build:editor-spike",
     "test": "npm run build && node --test dist/tests/*.test.js",
     "check": "npm run typecheck && npm run test",
     "demo": "npm run build && node dist/apps/cli/src/index.js demo .pitch-demo",
@@ -15,5 +16,14 @@
     "serve": "npm run build && node dist/apps/demo/src/server.js .pitch-demo 4173",
     "workspace": "npm run build && node dist/apps/workspace/src/server.js .pitch-demo 4173"
   },
-  "devDependencies": {"typescript": "^5.8.3"}
+  "dependencies": {
+    "@scena/guides": "^0.29.2",
+    "infinite-viewer": "^0.29.1",
+    "moveable": "^0.53.0",
+    "selecto": "^1.26.3"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0",
+    "typescript": "^5.8.3"
+  }
 }
