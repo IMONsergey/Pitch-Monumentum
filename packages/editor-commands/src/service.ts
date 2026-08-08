@@ -1,4 +1,5 @@
-import type { DeckDocument, Geometry, SceneElement, SlideDocument, TextRun, VectorPathData } from "../../deck-model/src/index.js";
+import { randomUUID } from "node:crypto";
+import type { DeckDocument, Geometry, ImageElement, SceneElement, SlideDocument, TextRun, VectorPathData } from "../../deck-model/src/index.js";
 import { autoLayoutMutationOperations } from "../../auto-layout/src/index.js";
 import { applyDeckMutation, createMutation, type DeckMutationOperation, type ElementAppearancePatch, type ElementStylePatch } from "../../mutations/src/index.js";
 import { validateVectorPathData, vectorPathToSvg } from "../../vector-engine/src/index.js";
@@ -49,6 +50,7 @@ export type EditorCommandInput =
   | { command: "insertText"; slideId: string; geometry: Geometry; text?: string }
   | { command: "insertShape"; slideId: string; geometry: Geometry; shape?: "rect" | "roundRect" | "ellipse" | "triangle"; fill?: string }
   | { command: "insertFrame"; slideId: string; geometry: Geometry; fill?: string }
+  | { command: "insertImage"; slideId: string; geometry: Geometry; assetId: string; alt?: string; fit?: ImageElement["fit"]; name?: string }
   | { command: "insertVector"; slideId: string; geometry: Geometry; pathData: VectorPathData; fill?: string; stroke?: { color: string; widthDU: number; dash?: "solid" | "dash" | "dot" }; name?: string };
 
 export interface ExecutedEditorCommand {
@@ -77,6 +79,25 @@ function maxZ(slide: SlideDocument): number {
 
 function resultForInsert(element: SceneElement): EditorCommandResult {
   return { operations: [{ op: "addElement", slideId: "", element }], nextSelectionIds: [element.id], affectedAutoLayoutContainerIds: [] };
+}
+
+function createImageElement(input: { geometry: Geometry; zIndex: number; assetId: string; alt?: string; fit?: ImageElement["fit"]; name?: string }): ImageElement {
+  const assetId = input.assetId.trim();
+  if (!assetId) throw new Error("assetId is required");
+  return {
+    id: `image_${randomUUID()}`,
+    type: "image",
+    name: input.name?.trim() || "Image",
+    semanticRole: "visual",
+    geometry: structuredClone(input.geometry),
+    zIndex: input.zIndex,
+    origin: "user",
+    exportStrategy: "native",
+    dependencies: [{ kind: "asset", id: assetId }],
+    assetId,
+    fit: input.fit ?? "cover",
+    alt: input.alt,
+  };
 }
 
 function layoutParentIds(slide: SlideDocument, elementId: string): string[] {
@@ -198,6 +219,9 @@ function dispatch(slide: SlideDocument, input: Exclude<EditorCommandInput, { com
       const element = createFrameElement({ geometry: input.geometry, zIndex: maxZ(slide) + 1, fill: input.fill });
       return resultForInsert(element);
     }
+    case "insertImage": {
+      return resultForInsert(createImageElement({ geometry: input.geometry, zIndex: maxZ(slide) + 1, assetId: input.assetId, alt: input.alt, fit: input.fit, name: input.name }));
+    }
     case "insertVector": {
       validateVectorPathData(input.pathData);
       const element = createShapeElement({
@@ -238,6 +262,7 @@ function reasonFor(input: EditorCommandInput): string {
     case "insertText": return "Insert text";
     case "insertShape": return "Insert shape";
     case "insertFrame": return "Insert frame";
+    case "insertImage": return `Insert image ${input.assetId}`;
     case "insertVector": return "Insert vector";
   }
 }
