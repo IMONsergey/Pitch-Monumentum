@@ -11,6 +11,11 @@ import { executePitchCodexTool, pitchCodexToolDefinitions, type PitchCodexToolCa
 import { runDeterministicQA } from "../../../packages/qa/src/index.js";
 import { exportProductionPptx } from "../../../packages/export-pipeline/src/index.js";
 import { VersionJournal } from "../../../packages/version-history/src/index.js";
+import type { MotionDocument } from "../../../packages/motion-engine/src/index.js";
+import { emptyMotionDocument, executeMotionCommand, reconcileMotionDocument, type MotionCommand } from "../../../packages/motion-commands/src/index.js";
+import { executeMediaCommand, type MediaCommand } from "../../../packages/media-commands/src/index.js";
+import type { ComponentDefinition, ComponentOverride, ComponentInstanceTransform } from "../../../packages/components/src/index.js";
+import { createComponentDefinitionFromSelection, detachComponentFromDeck, instantiateComponentIntoDeck } from "../../../packages/component-commands/src/index.js";
 import { editorSpikeHtml, workspaceHtml } from "./ui.js";
 
 function json(res: any, status: number, value: unknown): void {
@@ -26,11 +31,31 @@ async function body(req: any): Promise<any> {
 function activeHeadByKind(manifest: ProjectManifest, kind: string): BranchArtifactHead | undefined {
   return Object.values(manifest.branches[manifest.activeBranchId]?.heads ?? {}).find((head) => head.kind === kind);
 }
+function activeHeadsByKind(manifest: ProjectManifest, kind: string): BranchArtifactHead[] {
+  return Object.values(manifest.branches[manifest.activeBranchId]?.heads ?? {}).filter((head) => head.kind === kind);
+}
 async function staticAsset(name: "workspace.css" | "workspace.js" | "editor-spike.js"): Promise<string> {
   return readFile(resolve("apps", "workspace", "public", name), "utf8");
 }
 
 type EditorCommandRequest = (EditorCommandInput | SlideCommandInput) & { expectedDeckHash?: string };
+type MotionCommandRequest = MotionCommand & { expectedDeckHash?: string; expectedMotionHash?: string };
+type MediaCommandRequest = MediaCommand & { expectedDeckHash?: string };
+type ComponentCommandRequest =
+  | { command: "createFromSelection"; slideId: string; selectedIds: string[]; name: string; componentId?: string; description?: string; expectedDeckHash?: string }
+  | { command: "insert"; slideId: string; componentId: string; transform: ComponentInstanceTransform; overrides?: ComponentOverride[]; instanceId?: string; expectedDeckHash?: string }
+  | { command: "detach"; slideId: string; instanceId: string; expectedDeckHash?: string };
+
+function impactForVisualEdit(affectedSlideIds: string[], affectedElementIds: string[]) {
+  return {
+    affectedSlideIds,
+    affectedElementIds,
+    staleArtifacts: ["qa:visual", "qa:readability", "export"],
+    narrativeChanged: false,
+    evidenceRisk: false,
+    slideOrderChanged: false,
+  };
+}
 
 export class PitchWorkspaceService {
   readonly root: string;
@@ -50,7 +75,40 @@ export class PitchWorkspaceService {
     const deck = storedDeck.activeBranchId === manifest.activeBranchId ? storedDeck : { ...storedDeck, activeBranchId: manifest.activeBranchId };
     const qa = runDeterministicQA(deck);
     const history = await this.journal.status(manifest.activeBranchId, head.id);
-    return { manifest, deck, deckHash: deckHash(deck), qa, history };
+
+    const motionHead = activeHeadByKind(manifest, "motion");
+    const storedMotion = motionHead ? (await this.store.read<MotionDocument>(motionHead.id, motionHead.version)).payload : emptyMotionDocument(deck);
+    const motion = reconcileMotionDocument(deck, storedMotion);
+    const motionHistory = motionHead
+      ? await this.journal.status(manifest.activeBranchId, motionHead.id)
+      : { canUndo: false, canRedo: false, depth: 0, cursor: -1 };
+
+    const componentHeads = activeHeadsByKind(manifest, "component");
+    const components = await Promise.all(componentHeads.map(async (componentHead) => {
+      const definition = (await this.store.read<ComponentDefinition>(componentHead.id, componentHead.version)).payload;
+      return {
+        id: definition.id,
+        name: definition.name,
+        description: definition.description,
+        widthDU: definition.widthDU,
+        heightDU: definition.heightDU,
+        slots: definition.slots,
+        version: componentHead.version,
+        contentHash: componentHead.contentHash,
+      };
+    }));
+
+    return {
+      manifest,
+      deck,
+      deckHash: deckHash(deck),
+      qa,
+      history,
+      motion,
+      motionHash: motionHead?.contentHash,
+      motionHistory,
+      components,
+    };
   }
 
   private async writeDeckVersion(input: {
@@ -88,11 +146,15 @@ export class PitchWorkspaceService {
     return this.state();
   }
 
+  private assertDeckHash(current: Awaited<ReturnType<PitchWorkspaceService["state"]>>, expectedDeckHash?: string): void {
+    if (expectedDeckHash && expectedDeckHash !== current.deckHash) {
+      throw new Error(`Deck changed since command was authored: expected ${expectedDeckHash}, got ${current.deckHash}`);
+    }
+  }
+
   async mutate(input: { reason?: string; operations: DeckMutationOperation[]; expectedDeckHash?: string }) {
     const current = await this.state();
-    if (input.expectedDeckHash && input.expectedDeckHash !== current.deckHash) {
-      throw new Error(`Deck changed since mutation was authored: expected ${input.expectedDeckHash}, got ${current.deckHash}`);
-    }
+    this.assertDeckHash(current, input.expectedDeckHash);
     const mutation = createMutation(input.reason ?? "Workspace edit", input.operations, "user", current.deckHash);
     const applied = applyDeckMutation(current.deck, mutation);
     return this.writeDeckVersion({ current, deck: applied.deck, reason: mutation.reason, impact: applied.impact });
@@ -125,9 +187,7 @@ export class PitchWorkspaceService {
 
   async editorCommand(input: EditorCommandRequest) {
     const current = await this.state();
-    if (input.expectedDeckHash && input.expectedDeckHash !== current.deckHash) {
-      throw new Error(`Deck changed since editor command was authored: expected ${input.expectedDeckHash}, got ${current.deckHash}`);
-    }
+    this.assertDeckHash(current, input.expectedDeckHash);
 
     if (isSlideCommand(input)) {
       const executed = executeSlideCommand(current.deck, input);
@@ -183,11 +243,100 @@ export class PitchWorkspaceService {
     return { ...next, nextSelectionIds: [], reflowedContainerIds: [], commandReason: "Redo" };
   }
 
+  async mediaCommand(input: MediaCommandRequest) {
+    const current = await this.state();
+    this.assertDeckHash(current, input.expectedDeckHash);
+    const result = executeMediaCommand(current.deck, input);
+    if (!result.changed) return { ...current, ...result, commandReason: result.reason };
+    const next = await this.writeDeckVersion({
+      current,
+      deck: result.deck,
+      reason: result.reason,
+      impact: impactForVisualEdit(result.affectedSlideIds, result.affectedElementIds),
+    });
+    return { ...next, nextSelectionIds: result.nextSelectionIds, commandReason: result.reason };
+  }
+
+  async motionCommand(input: MotionCommandRequest) {
+    const current = await this.state();
+    this.assertDeckHash(current, input.expectedDeckHash);
+    if (input.expectedMotionHash && current.motionHash && input.expectedMotionHash !== current.motionHash) {
+      throw new Error(`Motion changed since command was authored: expected ${input.expectedMotionHash}, got ${current.motionHash}`);
+    }
+    const result = executeMotionCommand(current.deck, current.motion, input);
+    if (!result.changed) return { ...current, ...result, commandReason: result.reason };
+
+    const deckHead = activeHeadByKind(current.manifest, "deck")!;
+    let motionHead = activeHeadByKind(current.manifest, "motion");
+    const motionId = motionHead?.id ?? `motion_${current.deck.id}`;
+    if (!motionHead) {
+      const baseline = await this.store.write({ id: motionId, kind: "motion", payload: emptyMotionDocument(current.deck), producer: { type: "deterministic" }, inputs: [deckHead] });
+      motionHead = { id: baseline.id, kind: baseline.kind, version: baseline.version, contentHash: baseline.contentHash, status: baseline.status };
+      await this.journal.record(current.manifest.activeBranchId, motionHead);
+    } else {
+      await this.journal.record(current.manifest.activeBranchId, motionHead);
+    }
+    const artifact = await this.store.write({ id: motionId, kind: "motion", payload: result.motion, producer: { type: "user" }, inputs: [deckHead] });
+    await this.journal.record(current.manifest.activeBranchId, { id: artifact.id, kind: artifact.kind, version: artifact.version, contentHash: artifact.contentHash, status: artifact.status });
+    const next = await this.state();
+    return {
+      ...next,
+      affectedSlideIds: result.affectedSlideIds,
+      affectedElementIds: result.affectedElementIds,
+      nextBuildId: result.nextBuildId,
+      nextTrackId: result.nextTrackId,
+      commandReason: result.reason,
+    };
+  }
+
+  async motionUndo() {
+    const current = await this.state();
+    const head = activeHeadByKind(current.manifest, "motion");
+    if (!head) throw new Error("Nothing to undo in motion history");
+    await this.journal.undo(current.manifest.activeBranchId, head.id);
+    return { ...(await this.state()), commandReason: "Undo motion" };
+  }
+
+  async motionRedo() {
+    const current = await this.state();
+    const head = activeHeadByKind(current.manifest, "motion");
+    if (!head) throw new Error("Nothing to redo in motion history");
+    await this.journal.redo(current.manifest.activeBranchId, head.id);
+    return { ...(await this.state()), commandReason: "Redo motion" };
+  }
+
+  async componentCommand(input: ComponentCommandRequest) {
+    const current = await this.state();
+    this.assertDeckHash(current, input.expectedDeckHash);
+    const deckHead = activeHeadByKind(current.manifest, "deck")!;
+
+    if (input.command === "createFromSelection") {
+      const slide = current.deck.slides.find((item) => item.id === input.slideId);
+      if (!slide) throw new Error(`Unknown slide: ${input.slideId}`);
+      const definition = createComponentDefinitionFromSelection({ slide, selectedIds: input.selectedIds, name: input.name, componentId: input.componentId, description: input.description });
+      const existing = current.manifest.artifacts[definition.id];
+      if (existing && existing.kind !== "component") throw new Error(`Artifact ${definition.id} already exists as ${existing.kind}`);
+      const artifact = await this.store.write({ id: definition.id, kind: "component", payload: definition, producer: { type: "user" }, inputs: [deckHead] });
+      return { ...(await this.state()), component: definition, componentVersion: artifact.version, commandReason: `Create component ${definition.name}` };
+    }
+
+    if (input.command === "insert") {
+      const componentHead = current.manifest.branches[current.manifest.activeBranchId]?.heads[input.componentId];
+      if (!componentHead || componentHead.kind !== "component") throw new Error(`Unknown component: ${input.componentId}`);
+      const definition = (await this.store.read<ComponentDefinition>(componentHead.id, componentHead.version)).payload;
+      const result = instantiateComponentIntoDeck({ deck: current.deck, slideId: input.slideId, definition, transform: input.transform, overrides: input.overrides, instanceId: input.instanceId });
+      const next = await this.writeDeckVersion({ current, deck: result.deck, reason: result.reason, impact: impactForVisualEdit(result.affectedSlideIds, result.affectedElementIds) });
+      return { ...next, instance: result.instance, nextSelectionIds: result.nextSelectionIds, commandReason: result.reason };
+    }
+
+    const result = detachComponentFromDeck(current.deck, input.slideId, input.instanceId);
+    const next = await this.writeDeckVersion({ current, deck: result.deck, reason: result.reason, impact: impactForVisualEdit(result.affectedSlideIds, result.affectedElementIds) });
+    return { ...next, nextSelectionIds: result.nextSelectionIds, commandReason: result.reason };
+  }
+
   async setAutoLayout(input: { slideId: string; elementId: string; layout: AutoLayoutSpec; expectedDeckHash?: string }) {
     const current = await this.state();
-    if (input.expectedDeckHash && input.expectedDeckHash !== current.deckHash) {
-      throw new Error(`Deck changed since auto-layout edit was authored: expected ${input.expectedDeckHash}, got ${current.deckHash}`);
-    }
+    this.assertDeckHash(current, input.expectedDeckHash);
     const slide = current.deck.slides.find((item) => item.id === input.slideId);
     if (!slide) throw new Error(`Unknown slide: ${input.slideId}`);
     const operations = setAutoLayoutMutationOperations(slide, input.elementId, input.layout);
@@ -203,9 +352,7 @@ export class PitchWorkspaceService {
     expectedDeckHash?: string;
   }) {
     const current = await this.state();
-    if (input.expectedDeckHash && input.expectedDeckHash !== current.deckHash) {
-      throw new Error(`Deck changed since auto-layout wrap was authored: expected ${input.expectedDeckHash}, got ${current.deckHash}`);
-    }
+    this.assertDeckHash(current, input.expectedDeckHash);
     const slide = current.deck.slides.find((item) => item.id === input.slideId);
     if (!slide) throw new Error(`Unknown slide: ${input.slideId}`);
     const built = wrapSelectionInAutoLayoutOperations(slide, input.selectedIds, {
@@ -271,6 +418,11 @@ export function createWorkspaceServer(projectRoot: string) {
         json(res, 200, await service.editorCommand(data));
         return;
       }
+      if (req.method === "POST" && url.pathname === "/api/media-command") { json(res, 200, await service.mediaCommand(await body(req))); return; }
+      if (req.method === "POST" && url.pathname === "/api/motion-command") { json(res, 200, await service.motionCommand(await body(req))); return; }
+      if (req.method === "POST" && url.pathname === "/api/motion-undo") { json(res, 200, await service.motionUndo()); return; }
+      if (req.method === "POST" && url.pathname === "/api/motion-redo") { json(res, 200, await service.motionRedo()); return; }
+      if (req.method === "POST" && url.pathname === "/api/component-command") { json(res, 200, await service.componentCommand(await body(req))); return; }
       if (req.method === "POST" && url.pathname === "/api/auto-layout") {
         const data = await body(req);
         if (!data.slideId || !data.elementId || !data.layout) throw new Error("slideId, elementId and layout are required");
