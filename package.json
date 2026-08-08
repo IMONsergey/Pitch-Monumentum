@@ -18,10 +18,16 @@
     "workspace": "npm run build && node dist/apps/workspace/src/server.js .pitch-demo 4173"
   },
   "dependencies": {
+    "@lexical/history": "^0.48.0",
+    "@lexical/list": "^0.48.0",
+    "@lexical/rich-text": "^0.48.0",
+    "@lexical/selection": "^0.48.0",
     "@scena/guides": "^0.29.2",
     "infinite-viewer": "^0.29.1",
+    "lexical": "^0.48.0",
     "moveable": "^0.53.0",
-    "selecto": "^1.26.3"
+    "selecto": "^1.26.3",
+    "yoga-layout": "^3.2.1"
   },
   "devDependencies": {
     "@types/node": "^22.20.1",
