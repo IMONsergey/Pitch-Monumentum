@@ -180,6 +180,18 @@ export interface DropShadowEffect {
 
 export type VisualEffect = DropShadowEffect;
 
+export type VectorPathCommand =
+  | { command: "M"; x: number; y: number }
+  | { command: "L"; x: number; y: number }
+  | { command: "C"; x1: number; y1: number; x2: number; y2: number; x: number; y: number }
+  | { command: "Q"; x1: number; y1: number; x: number; y: number }
+  | { command: "Z" };
+
+export interface VectorPathData {
+  commands: VectorPathCommand[];
+  fillRule?: "nonzero" | "evenodd";
+}
+
 export interface AutoLayoutPadding {
   top: number;
   right: number;
@@ -294,6 +306,9 @@ export interface ShapeElement extends SceneElementBase {
   fillPaint?: Paint;
   stroke?: StrokeStyle;
   radiusDU?: number;
+  /** Structured local-coordinate path data used by the vector editor. */
+  pathData?: VectorPathData;
+  /** Legacy/raw SVG path fallback. pathData takes precedence when present. */
   svgPath?: string;
 }
 
