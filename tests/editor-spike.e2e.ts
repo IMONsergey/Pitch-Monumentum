@@ -148,3 +148,53 @@ test("in-canvas Lexical editing persists mixed formatting as canonical TextRuns"
     await harness.close();
   }
 });
+
+test("Shift+A wraps a multi-selection in canonical Auto Layout and inspector updates it", async () => {
+  const harness = await createHarness("pitch-layout-e2e-");
+  const { base, page } = harness;
+  try {
+    const before = await project(base);
+    const slide = before.deck.slides[0];
+    const candidates = slide.scene.filter((element: any) => !element.locked && element.geometry.width > 0 && element.geometry.height > 0 && element.geometry.width < before.deck.canvas.widthDU * 0.9).slice(0, 2);
+    assert.equal(candidates.length, 2, "Demo deck needs at least two selectable bounded elements");
+    const selectedIds = candidates.map((element: any) => element.id);
+
+    await page.goto(`${base}/editor-spike`, { waitUntil: "networkidle" });
+    const first = page.locator(`#spikeScene [data-id="${selectedIds[0]}"]`);
+    const second = page.locator(`#spikeScene [data-id="${selectedIds[1]}"]`);
+    await first.click();
+    await second.click({ modifiers: ["Shift"] });
+    await page.locator("#spikeSelection").getByText("2 selected", { exact: false }).waitFor();
+
+    await page.keyboard.press("Shift+A");
+    await page.getByText("Auto Layout frame created", { exact: false }).waitFor({ timeout: 10_000 });
+    const wrapped = await project(base);
+    const created = wrapped.deck.slides[0].scene.find((element: any) => element.type === "frame" && selectedIds.every((id: string) => element.childIds.includes(id)));
+    assert(created, `Expected frame containing ${selectedIds.join(", ")}`);
+    assert.equal(created.layout.direction, "horizontal");
+    assert.equal(created.layout.gapDU, 24);
+
+    const childGeometries = selectedIds.map((id: string) => wrapped.deck.slides[0].scene.find((element: any) => element.id === id).geometry);
+    assert(childGeometries[1].x > childGeometries[0].x, "Yoga should place the second child after the first in horizontal layout");
+
+    await page.locator(`#spikeScene [data-id="${created.id}"]`).click();
+    await page.locator("#pitchAutoLayoutButton").click();
+    await page.locator("#pitchLayoutPanel.visible").waitFor();
+    await page.locator("[data-layout=gap]").fill("40");
+    await page.locator("[data-layout-action=apply]").click();
+
+    await page.waitForFunction(async (frameId) => {
+      const response = await fetch("/api/project");
+      const next = await response.json();
+      const frame = next.deck.slides.flatMap((slide: any) => slide.scene).find((element: any) => element.id === frameId);
+      return frame?.layout?.gapDU === 40;
+    }, created.id, { timeout: 10_000 });
+
+    const after = await project(base);
+    const updated = after.deck.slides[0].scene.find((element: any) => element.id === created.id);
+    assert.equal(updated.layout.gapDU, 40);
+    assert.notEqual(after.deckHash, before.deckHash);
+  } finally {
+    await harness.close();
+  }
+});
