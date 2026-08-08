@@ -61,6 +61,18 @@ export function createReviewWorkspaceServer(projectRoot: string) {
         const state = await review.state(); const deck = await review.service.state();
         json(res, 200, reviewDeliveryGate(deck.deck, state.document, input)); return;
       }
+      if (req.method === "POST" && url.pathname === "/api/export") {
+        const reviewState = await review.state();
+        const deckState = await review.service.state();
+        const gate = reviewDeliveryGate(deckState.deck, reviewState.document);
+        if (!gate.ready) {
+          json(res, 409, { error: "Production export blocked by unresolved review/approval state", reviewGate: gate });
+          return;
+        }
+        const exported = await inner.service.exportPptx();
+        json(res, 200, { ...exported, reviewGate: gate });
+        return;
+      }
       inner.server.emit("request", req, res);
     } catch (error) {
       json(res, 400, { error: error instanceof Error ? error.message : String(error) });
