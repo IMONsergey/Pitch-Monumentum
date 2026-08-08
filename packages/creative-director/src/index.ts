@@ -50,7 +50,7 @@ export interface CreativeReviewInput {
 }
 
 export interface CreativeQualityLane {
-  lane: "structure" | "visual" | "brand" | "editability" | "assets" | "masters" | "motion";
+  lane: "structure" | "visual" | "evidence" | "brand" | "editability" | "assets" | "masters" | "motion";
   score: number;
   blockers: number;
   warnings: number;
@@ -110,17 +110,21 @@ function scoreFromIssues(base: number, issues: Array<{ severity: string }>): num
 function issueCount(issues: Array<{ severity: string }>, severe = false): number { return issues.filter((issue) => severe ? issue.severity === "critical" || issue.severity === "major" : issue.severity === "minor").length; }
 function criticalCount(issues: Array<{ severity: string }>): number { return issues.filter((issue) => issue.severity === "critical").length; }
 
+function laneFromDeterministic(input: CreativeReviewInput, lane: CreativeQualityLane["lane"], categories: QAIssue["category"][]): CreativeQualityLane {
+  const issues = input.deterministicQA.filter((issue) => categories.includes(issue.category));
+  return { lane, score: scoreFromIssues(100, issues), blockers: criticalCount(issues), warnings: issueCount(issues, true) + issueCount(issues), notes: issues.slice(0, 5).map((issue) => issue.message) };
+}
 function structureLane(input: CreativeReviewInput): CreativeQualityLane {
-  const issues = input.deterministicQA.filter((issue) => issue.category === "schema" || issue.category === "geometry" || issue.category === "narrative");
-  return { lane: "structure", score: scoreFromIssues(100, issues), blockers: criticalCount(issues), warnings: issueCount(issues, true) + issueCount(issues), notes: issues.slice(0, 5).map((issue) => issue.message) };
+  return laneFromDeterministic(input, "structure", ["schema", "geometry", "narrative"]);
 }
 function visualLane(input: CreativeReviewInput): CreativeQualityLane {
-  const issues = input.deterministicQA.filter((issue) => issue.category === "visual" || issue.category === "readability");
-  return { lane: "visual", score: scoreFromIssues(100, issues), blockers: criticalCount(issues), warnings: issueCount(issues, true) + issueCount(issues), notes: issues.slice(0, 5).map((issue) => issue.message) };
+  return laneFromDeterministic(input, "visual", ["visual", "readability"]);
+}
+function evidenceLane(input: CreativeReviewInput): CreativeQualityLane {
+  return laneFromDeterministic(input, "evidence", ["evidence"]);
 }
 function editabilityLane(input: CreativeReviewInput): CreativeQualityLane {
-  const issues = input.deterministicQA.filter((issue) => issue.category === "export");
-  return { lane: "editability", score: scoreFromIssues(100, issues), blockers: criticalCount(issues), warnings: issueCount(issues, true) + issueCount(issues), notes: issues.slice(0, 5).map((issue) => issue.message) };
+  return laneFromDeterministic(input, "editability", ["export"]);
 }
 function brandLane(input: CreativeReviewInput): CreativeQualityLane {
   const issues = input.brandQA ?? [];
@@ -149,12 +153,12 @@ function motionLane(input: CreativeReviewInput): CreativeQualityLane {
 }
 
 export function reviewCreativeQuality(input: CreativeReviewInput): CreativeReview {
-  const lanes = [structureLane(input), visualLane(input), brandLane(input), editabilityLane(input), assetLane(input), masterLane(input), motionLane(input)];
-  const weights: Record<CreativeQualityLane["lane"], number> = { structure: .18, visual: .18, brand: .15, editability: .16, assets: .12, masters: .12, motion: .09 };
+  const lanes = [structureLane(input), evidenceLane(input), visualLane(input), brandLane(input), editabilityLane(input), assetLane(input), masterLane(input), motionLane(input)];
+  const weights: Record<CreativeQualityLane["lane"], number> = { structure: .15, evidence: .16, visual: .16, brand: .13, editability: .14, assets: .10, masters: .09, motion: .07 };
   const score = Math.round(lanes.reduce((sum, lane) => sum + lane.score * weights[lane.lane], 0));
   const blockerCount = lanes.reduce((sum, lane) => sum + lane.blockers, 0);
   const warningCount = lanes.reduce((sum, lane) => sum + lane.warnings, 0);
-  const priorities = [...lanes].sort((a, b) => a.score - b.score).filter((lane) => lane.score < 95 || lane.blockers).slice(0, 4).map((lane) => `${lane.lane}: ${lane.notes[0] ?? `${lane.score}/100`}`);
+  const priorities = [...lanes].sort((a, b) => a.score - b.score).filter((lane) => lane.score < 95 || lane.blockers).slice(0, 5).map((lane) => `${lane.lane}: ${lane.notes[0] ?? `${lane.score}/100`}`);
   return { score, ready: blockerCount === 0 && score >= 85, blockerCount, warningCount, lanes, priorities };
 }
 
@@ -176,7 +180,7 @@ export function buildCreativeDirectorPlan(request: CreativeChangeRequest, input:
   const assumptions: string[] = [];
   if (request.scope.kind === "selection" && !(request.scope.elementIds?.length)) blockers.push("Selection scope requires elementIds");
   if ((request.scope.kind === "slide" || request.scope.kind === "selection") && !(request.scope.slideIds?.length)) blockers.push(`${request.scope.kind} scope requires slideIds`);
-  if (!request.allowEvidenceChange && request.intent.includes("content")) assumptions.push("Preserve existing claim/evidence relationships; content edits must remain meaning-preserving unless separately approved.");
+  if (!request.allowEvidenceChange && (request.intent.includes("content") || request.intent.includes("data"))) assumptions.push("Preserve existing claim/evidence relationships; factual edits require separate approval.");
   if (!request.allowNarrativeChange && request.intent.includes("content")) assumptions.push("Narrative structure and slide order remain fixed.");
 
   const steps: CreativePlanStep[] = [];
@@ -212,9 +216,9 @@ export function buildCreativeDirectorPlan(request: CreativeChangeRequest, input:
     const step = baseStep("edit_system", 0, "edit", "component", "componentOrSystemCommand", request, request.scope.kind === "deck" ? "high" : "medium", "Use linked components/tokens/masters for reusable system-level changes rather than repeated one-off edits."); push({ ...step, order: 0 });
   }
 
-  const verify = baseStep("verify_quality", 0, "verify", "qa", "productionReview", request, "low", "Re-run deterministic, brand, master, asset and motion review after edits and reject regressions.");
+  const verify = baseStep("verify_quality", 0, "verify", "qa", "productionReview", request, "low", "Re-run deterministic evidence/structure/visual QA, Brand QA, master, asset and motion review after edits and reject regressions.");
   verify.prerequisites.push(...steps.filter((step) => step.phase === "edit").map((step) => step.id));
-  verify.expectedEffects.push("No new critical QA issues", "No unintended scope changes", "Canonical editability preserved");
+  verify.expectedEffects.push("No new critical QA issues", "No unintended scope changes", "Canonical editability preserved", "Evidence integrity preserved unless explicitly approved");
   push({ ...verify, order: 0 });
 
   const planRisk = maxRisk([scopeRisk(request.scope), ...steps.map((step) => step.risk)]);
@@ -222,6 +226,7 @@ export function buildCreativeDirectorPlan(request: CreativeChangeRequest, input:
   const acceptanceCriteria = [...new Set([
     ...(request.acceptanceCriteria ?? []),
     "No new critical deterministic QA issues",
+    "No new critical evidence QA issues",
     "No broken asset/master/motion references",
     "Result remains manually editable",
     ...(request.mustPreserve ?? []).map((item) => `Preserve: ${item}`),
