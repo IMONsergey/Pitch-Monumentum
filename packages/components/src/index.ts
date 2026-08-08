@@ -217,8 +217,10 @@ export function refreshComponentInstance(definition: ComponentDefinition, instan
   const normalized = normalizedTransform(instance.transform);
   const nextMap: Record<string, string> = {};
   for (const element of definition.elements) nextMap[element.id] = instance.elementIdMap[element.id] ?? `${instance.id}_${element.id.replace(/[^a-zA-Z0-9_-]/g, "_")}`;
+  const validSlots = new Set(definition.slots.map((slot) => slot.id));
+  const overrides = instance.overrides.filter((override) => validSlots.has(override.slotId));
   let elements = definition.elements.map((element) => cloneElement(element, nextMap, instance.id, normalized));
-  elements = applyOverrides(definition, elements, nextMap, instance.overrides);
+  elements = applyOverrides(definition, elements, nextMap, overrides);
   validateSceneHierarchy(elements);
   return {
     instance: {
@@ -226,6 +228,7 @@ export function refreshComponentInstance(definition: ComponentDefinition, instan
       elementIdMap: nextMap,
       rootIds: definition.rootIds.map((id) => nextMap[id]),
       transform: normalized,
+      overrides: structuredClone(overrides),
     },
     elements,
   };
