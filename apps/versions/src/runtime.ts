@@ -82,8 +82,15 @@ export class VersionWorkspaceRuntime {
 
   async restoreCheckpoint(checkpointId: string, branchName?: string) {
     const checkpoint = await this.checkpoints.get(checkpointId);
-    const current = await this.service.state();
-    const newBranchId = await this.service.store.forkBranchFromSnapshot(branchName?.trim() || `Restore · ${checkpoint.name}`, checkpoint.heads, current.manifest.activeBranchId);
+    const manifest = await this.service.store.readManifest();
+    if (!manifest.branches[checkpoint.sourceBranchId]) {
+      throw new Error(`Checkpoint source branch no longer exists: ${checkpoint.sourceBranchId}`);
+    }
+    const newBranchId = await this.service.store.forkBranchFromSnapshot(
+      branchName?.trim() || `Restore · ${checkpoint.name}`,
+      checkpoint.heads,
+      checkpoint.sourceBranchId,
+    );
     await this.service.journal.forkFromHeads(newBranchId, checkpoint.heads);
     return { checkpoint, restoredBranchId: newBranchId, state: await this.service.state() };
   }
