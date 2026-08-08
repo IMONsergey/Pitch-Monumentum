@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { createMasterDesignWorkspaceServer } from "./master-design-server.js";
 import { CreativeDirectorRuntime, type CreativeDirectorPreparation } from "../../creative-director/src/runtime.js";
+import { executeCreativeSafeFixes, previewCreativeSafeFixes } from "../../creative-director/src/autofix-runtime.js";
 import type { CreativeChangeRequest } from "../../../packages/creative-director/src/index.js";
 import type { CreativeExecutionBundle } from "../../../packages/creative-director/src/execution.js";
 
@@ -63,6 +64,16 @@ export function createCreativeDirectorWorkspaceServer(projectRoot: string) {
       }
       if (req.method === "GET" && url.pathname === "/api/creative-review") {
         json(res, 200, compactReview(await director.review()));
+        return;
+      }
+      if (req.method === "GET" && url.pathname === "/api/creative-safe-fixes") {
+        json(res, 200, await previewCreativeSafeFixes(director.service));
+        return;
+      }
+      if (req.method === "POST" && url.pathname === "/api/creative-safe-fixes") {
+        const input = await body(req) as { expectedDeckHash?: string };
+        const result = await executeCreativeSafeFixes(director.service, input.expectedDeckHash);
+        json(res, 200, { deckHash: result.deckHash, activeBranchId: result.manifest.activeBranchId, plan: result.plan, commandReason: result.commandReason, affectedSlideIds: result.affectedSlideIds, affectedElementIds: result.affectedElementIds, history: result.history });
         return;
       }
       if (req.method === "POST" && url.pathname === "/api/creative-plan") {
