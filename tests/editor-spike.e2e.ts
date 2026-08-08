@@ -35,10 +35,12 @@ test("Daybrush editor spike commits a real drag into the canonical deck", async 
     await page.locator(".moveable-control-box").waitFor({ state: "visible" });
 
     const box = await target.boundingBox();
-    assert(box);
-    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    if (!box) throw new Error("Selected scene element did not produce a browser bounding box");
+    const startX = box.x + box.width / 2;
+    const startY = box.y + box.height / 2;
+    await page.mouse.move(startX, startY);
     await page.mouse.down();
-    await page.mouse.move(box.x + box.width / 2 + 55, box.y + box.height / 2 + 35, { steps: 8 });
+    await page.mouse.move(startX + 55, startY + 35, { steps: 8 });
     await page.mouse.up();
     await page.getByText("committed through DeckMutation", { exact: false }).waitFor({ timeout: 10_000 });
 
