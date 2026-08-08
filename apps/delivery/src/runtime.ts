@@ -1,6 +1,5 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { createHash } from "node:crypto";
 import { PitchWorkspaceService } from "../../workspace/src/server.js";
 import { ReviewWorkspaceRuntime } from "../../review/src/runtime.js";
 import { reviewDeliveryGate, type ReviewDeliveryGate, type ReviewDeliveryPolicy } from "../../../packages/review-engine/src/delivery.js";
@@ -8,6 +7,7 @@ import { productionPreflight } from "../../../packages/export-pipeline/src/index
 import { createFigmaBridgeDocument, type FigmaBridgeAsset } from "../../../packages/figma-bridge/src/index.js";
 import { exportStandaloneWeb, type WebExportAsset } from "../../../packages/web-export/src/index.js";
 import { convertPptxToKeynote, keynoteAvailability, type KeynoteAvailability, type KeynoteCommandRunner } from "../../../packages/keynote-export/src/index.js";
+import { inspectFilesystemArtifact } from "../../../packages/fs-artifact/src/index.js";
 import type { DeckDocument } from "../../../packages/deck-model/src/index.js";
 
 export type DeliveryFormat = "pptx" | "figma" | "web" | "keynote";
@@ -39,6 +39,8 @@ export interface DeliveryArtifact {
   filename: string;
   bytes: number;
   sha256: string;
+  filesystemKind: "file" | "directory";
+  fileCount: number;
   warnings: string[];
   adapterStatus?: string;
 }
@@ -70,8 +72,18 @@ function format(format: DeliveryFormat, ready: boolean, blockers: string[], warn
 }
 
 async function fileArtifact(formatName: DeliveryFormat, path: string, warnings: string[] = [], adapterStatus?: string): Promise<DeliveryArtifact> {
-  const bytes = await readFile(path);
-  return { format: formatName, path, filename: path.split(/[\\/]/).pop() || path, bytes: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex"), warnings: [...new Set(warnings)], adapterStatus };
+  const inspected = await inspectFilesystemArtifact(path);
+  return {
+    format: formatName,
+    path: inspected.path,
+    filename: inspected.path.split(/[\\/]/).pop() || inspected.path,
+    bytes: inspected.bytes,
+    sha256: inspected.sha256,
+    filesystemKind: inspected.kind,
+    fileCount: inspected.fileCount,
+    warnings: [...new Set(warnings)],
+    adapterStatus,
+  };
 }
 
 export class DeliveryRuntime {
