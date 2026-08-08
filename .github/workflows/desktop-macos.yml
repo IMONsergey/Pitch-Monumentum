@@ -14,8 +14,20 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build-intel-dmg:
-    runs-on: macos-15-intel
+  build-x64-dmg:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            flavor: cross-arm
+            artifact: Pitch-Monumentum-mac-x64-cross
+            publish: true
+          - runner: macos-15-intel
+            flavor: native-intel
+            artifact: Pitch-Monumentum-mac-x64-native
+            publish: false
+    runs-on: ${{ matrix.runner }}
     env:
       CSC_IDENTITY_AUTO_DISCOVERY: "false"
     steps:
@@ -29,22 +41,28 @@ jobs:
       - name: Verify x64 desktop output
         run: |
           ls -lah release
-          test -n "$(find release -maxdepth 1 -name 'Pitch-Monumentum-*-x64.dmg' -print -quit)"
-          shasum -a 256 release/*.dmg | tee release/SHA256SUMS.txt
+          DMG="$(find release -maxdepth 1 -name 'Pitch-Monumentum-*-x64.dmg' -print -quit)"
+          test -n "$DMG"
+          APP_BIN="$(find release -path '*/Pitch Monumentum.app/Contents/MacOS/Pitch Monumentum' -print -quit)"
+          test -n "$APP_BIN"
+          file "$APP_BIN" | tee release/ARCHITECTURE.txt
+          grep -q 'x86_64' release/ARCHITECTURE.txt
+          shasum -a 256 "$DMG" | tee release/SHA256SUMS.txt
       - uses: actions/upload-artifact@v4
         with:
-          name: Pitch-Monumentum-mac-x64
+          name: ${{ matrix.artifact }}
           path: |
             release/*.dmg
             release/SHA256SUMS.txt
+            release/ARCHITECTURE.txt
           retention-days: 30
       - name: Publish desktop preview release
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && matrix.publish
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           TAG="desktop-preview-${GITHUB_RUN_NUMBER}"
-          gh release create "$TAG" release/*.dmg release/SHA256SUMS.txt \
+          gh release create "$TAG" release/*.dmg release/SHA256SUMS.txt release/ARCHITECTURE.txt \
             --target "$GITHUB_SHA" \
             --title "Pitch Monumentum Desktop Preview ${GITHUB_RUN_NUMBER}" \
             --notes "Unsigned Intel macOS x64 development preview. Built from ${GITHUB_SHA}." \
