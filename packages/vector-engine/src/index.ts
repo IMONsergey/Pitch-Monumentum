@@ -1,6 +1,20 @@
 import { randomUUID } from "node:crypto";
 import { getStroke } from "perfect-freehand";
 import type { ShapeElement, VectorPathCommand, VectorPathData } from "../../deck-model/src/index.js";
+import { vectorPathToSvg } from "../../vector-path/src/index.js";
+
+export {
+  moveVectorAnchor,
+  moveVectorHandle,
+  normalizeVectorPath,
+  parseSvgPathData,
+  translateVectorPath,
+  validateVectorPathData,
+  vectorAnchors,
+  vectorPathBounds,
+  vectorPathToSvg,
+} from "../../vector-path/src/index.js";
+export type { VectorAnchor, VectorBounds } from "../../vector-path/src/index.js";
 
 export interface VectorPoint {
   x: number;
@@ -13,15 +27,6 @@ export interface PenAnchor {
   y: number;
   in?: { x: number; y: number };
   out?: { x: number; y: number };
-}
-
-export interface VectorAnchor {
-  commandIndex: number;
-  command: "M" | "L" | "C" | "Q";
-  x: number;
-  y: number;
-  inHandle?: { x: number; y: number };
-  outHandle?: { x: number; y: number };
 }
 
 export interface FreehandOptions {
@@ -66,93 +71,8 @@ function bounds(points: Array<[number, number]>): { left: number; top: number; r
   return { left: Math.min(...xs), top: Math.min(...ys), right: Math.max(...xs), bottom: Math.max(...ys) };
 }
 
-function fmt(value: number): string {
-  const rounded = Math.round(value * 1000) / 1000;
-  return Object.is(rounded, -0) ? "0" : String(rounded);
-}
-
 function local(point: [number, number], left: number, top: number): [number, number] {
   return [point[0] - left, point[1] - top];
-}
-
-export function validateVectorPathData(path: VectorPathData): void {
-  if (!Array.isArray(path.commands) || path.commands.length === 0) throw new Error("Vector path requires at least one command");
-  let active = false;
-  path.commands.forEach((command, index) => {
-    const check = (value: number, label: string) => finite(value, `command ${index} ${label}`);
-    if (command.command === "M") {
-      check(command.x, "x"); check(command.y, "y"); active = true; return;
-    }
-    if (command.command === "Z") {
-      if (!active) throw new Error(`Close command ${index} has no active subpath`);
-      active = false; return;
-    }
-    if (!active) throw new Error(`Command ${index} (${command.command}) must follow M`);
-    if (command.command === "L") { check(command.x, "x"); check(command.y, "y"); return; }
-    if (command.command === "Q") { check(command.x1, "x1"); check(command.y1, "y1"); check(command.x, "x"); check(command.y, "y"); return; }
-    check(command.x1, "x1"); check(command.y1, "y1"); check(command.x2, "x2"); check(command.y2, "y2"); check(command.x, "x"); check(command.y, "y");
-  });
-}
-
-export function vectorPathToSvg(path: VectorPathData): string {
-  validateVectorPathData(path);
-  return path.commands.map((command) => {
-    if (command.command === "Z") return "Z";
-    if (command.command === "M" || command.command === "L") return `${command.command} ${fmt(command.x)} ${fmt(command.y)}`;
-    if (command.command === "Q") return `Q ${fmt(command.x1)} ${fmt(command.y1)} ${fmt(command.x)} ${fmt(command.y)}`;
-    return `C ${fmt(command.x1)} ${fmt(command.y1)} ${fmt(command.x2)} ${fmt(command.y2)} ${fmt(command.x)} ${fmt(command.y)}`;
-  }).join(" ");
-}
-
-export function effectiveVectorSvgPath(element: ShapeElement): string | undefined {
-  if (element.shape !== "custom") return undefined;
-  return element.pathData ? vectorPathToSvg(element.pathData) : element.svgPath;
-}
-
-export function vectorAnchors(path: VectorPathData): VectorAnchor[] {
-  validateVectorPathData(path);
-  const result: VectorAnchor[] = [];
-  for (let index = 0; index < path.commands.length; index += 1) {
-    const command = path.commands[index];
-    if (command.command === "Z") continue;
-    const next = path.commands[index + 1];
-    const outHandle = next?.command === "C" || next?.command === "Q" ? { x: next.x1, y: next.y1 } : undefined;
-    if (command.command === "C") result.push({ commandIndex: index, command: "C", x: command.x, y: command.y, inHandle: { x: command.x2, y: command.y2 }, outHandle });
-    else if (command.command === "Q") result.push({ commandIndex: index, command: "Q", x: command.x, y: command.y, inHandle: { x: command.x1, y: command.y1 }, outHandle });
-    else result.push({ commandIndex: index, command: command.command, x: command.x, y: command.y, outHandle });
-  }
-  return result;
-}
-
-export function moveVectorAnchor(path: VectorPathData, commandIndex: number, x: number, y: number, moveHandles = true): VectorPathData {
-  validateVectorPathData(path);
-  finite(x, "anchor x"); finite(y, "anchor y");
-  const commands = structuredClone(path.commands);
-  const command = commands[commandIndex];
-  if (!command || command.command === "Z") throw new Error(`Command ${commandIndex} is not a movable vector anchor`);
-  const dx = x - command.x;
-  const dy = y - command.y;
-  if (moveHandles) {
-    if (command.command === "C") { command.x2 += dx; command.y2 += dy; }
-    if (command.command === "Q") { command.x1 += dx; command.y1 += dy; }
-    const next = commands[commandIndex + 1];
-    if (next?.command === "C" || next?.command === "Q") { next.x1 += dx; next.y1 += dy; }
-  }
-  command.x = x;
-  command.y = y;
-  return { ...path, commands };
-}
-
-export function translateVectorPath(path: VectorPathData, dx: number, dy: number): VectorPathData {
-  validateVectorPathData(path);
-  finite(dx, "dx"); finite(dy, "dy");
-  const commands = path.commands.map((command): VectorPathCommand => {
-    if (command.command === "Z") return { command: "Z" };
-    if (command.command === "M" || command.command === "L") return { ...command, x: command.x + dx, y: command.y + dy };
-    if (command.command === "Q") return { ...command, x1: command.x1 + dx, y1: command.y1 + dy, x: command.x + dx, y: command.y + dy };
-    return { ...command, x1: command.x1 + dx, y1: command.y1 + dy, x2: command.x2 + dx, y2: command.y2 + dy, x: command.x + dx, y: command.y + dy };
-  });
-  return { ...path, commands };
 }
 
 function outlinePathData(outline: Array<[number, number]>, left: number, top: number): VectorPathData {
