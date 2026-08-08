@@ -1,0 +1,24 @@
+import { installPitchRichTextUI } from "./rich-text-ui.js";
+import { installPitchAutoLayoutUI } from "./auto-layout-ui.js";
+import { installPitchProEditorUI } from "./pro-editor-ui.js";
+import { installPitchHistoryShortcuts } from "./history-shortcuts.js";
+import { installPitchInspectorUI } from "./inspector-ui.js";
+import { installPitchVisualStyleUI } from "./visual-style-ui.js";
+import { installPitchAppearanceUI } from "./appearance-ui.js";
+import { installPitchVectorUI } from "./vector-ui.js";
+import { installPitchVectorRenderer } from "./vector-render-ui.js";
+import { installPitchVectorNodeUI } from "./vector-node-ui.js";
+import { installPitchSlideUI } from "./slide-ui.js";
+import "./client.js";
+
+installPitchRichTextUI();
+installPitchAutoLayoutUI();
+installPitchProEditorUI();
+installPitchHistoryShortcuts();
+installPitchInspectorUI();
+installPitchVisualStyleUI();
+installPitchAppearanceUI();
+installPitchVectorUI();
+installPitchVectorRenderer();
+installPitchVectorNodeUI();
+installPitchSlideUI();

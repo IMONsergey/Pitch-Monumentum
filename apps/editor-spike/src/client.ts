@@ -75,6 +75,16 @@ function sceneElement(elementId: string): AnyRecord | undefined {
   return currentSlide()?.scene.find((element: AnyRecord) => element.id === elementId);
 }
 
+function emitEditorState(): void {
+  window.dispatchEvent(new CustomEvent("pitch:editor-state", {
+    detail: {
+      project: state.project,
+      slideId: state.slideId,
+      selectedIds: [...state.selectedIds],
+    },
+  }));
+}
+
 function styleFor(element: AnyRecord): string {
   const g = element.geometry;
   return [
@@ -97,7 +107,8 @@ function textStyle(run: AnyRecord): string {
 
 function draw(element: AnyRecord): string {
   const selected = state.selectedIds.includes(element.id) ? " selected" : "";
-  const common = `class="spike-el selectable${selected}" data-id="${esc(element.id)}" data-rotation="${element.geometry.rotation || 0}"`;
+  const interactionClass = element.locked ? " locked" : " selectable";
+  const common = `class="spike-el${interactionClass}${selected}" data-id="${esc(element.id)}" data-rotation="${element.geometry.rotation || 0}" data-locked="${element.locked ? "true" : "false"}"`;
   if (element.type === "text") {
     const body = element.paragraphs.map((paragraph: AnyRecord) => `<div style="text-align:${esc(paragraph.align || "left")};line-height:${paragraph.lineSpacing || 1.2}">${paragraph.runs.map((run: AnyRecord) => `<span style="${textStyle(run)}">${esc(run.text)}</span>`).join("")}</div>`).join("");
     return `<div ${common} style="${styleFor(element)}">${body}</div>`;
@@ -131,7 +142,7 @@ function renderScene(): void {
 }
 
 function selectedTargets(): HTMLElement[] {
-  return state.selectedIds.map((id) => document.querySelector<HTMLElement>(`#spikeScene [data-id="${CSS.escape(id)}"]`)).filter((element): element is HTMLElement => Boolean(element));
+  return state.selectedIds.map((id) => document.querySelector<HTMLElement>(`#spikeScene [data-id="${CSS.escape(id)}"].selectable`)).filter((element): element is HTMLElement => Boolean(element));
 }
 
 function beginInteraction(kind: string): void {
@@ -140,7 +151,7 @@ function beginInteraction(kind: string): void {
   state.previewGeometry = {};
   for (const id of state.selectedIds) {
     const model = sceneElement(id);
-    if (!model) continue;
+    if (!model || model.locked) continue;
     const geometry: Geometry = structuredClone(model.geometry);
     state.baseGeometry[id] = geometry;
     state.previewGeometry[id] = structuredClone(geometry);
@@ -172,13 +183,17 @@ function applyGeometryPreview(elementId: string, changes: Partial<Geometry>): vo
 }
 
 function updateSelection(ids: string[]): void {
-  state.selectedIds = [...new Set(ids)];
+  state.selectedIds = [...new Set(ids.filter((id) => {
+    const element = sceneElement(id);
+    return Boolean(element && !element.locked);
+  }))];
   document.querySelectorAll<HTMLElement>("#spikeScene .selectable").forEach((element) => element.classList.toggle("selected", state.selectedIds.includes(element.dataset.id ?? "")));
   if (state.moveable) {
     state.moveable.target = selectedTargets();
     state.moveable.updateRect?.();
   }
   $("#spikeSelection").textContent = state.selectedIds.length ? `${state.selectedIds.length} selected · ${state.selectedIds.join(", ")}` : "Nothing selected";
+  emitEditorState();
 }
 
 function geometryChanged(a: Geometry, b: Geometry): boolean {
@@ -214,6 +229,23 @@ async function commitInteraction(reason: string): Promise<void> {
   $("#spikeStatus").textContent = `${reason} committed through DeckMutation · artifact version updated`;
 }
 
+async function runEditorCommand(input: AnyRecord): Promise<any> {
+  const slide = currentSlide();
+  if (!slide || !state.project) throw new Error("Editor is not ready");
+  const request = {
+    ...input,
+    slideId: input.slideId ?? slide.id,
+    expectedDeckHash: state.project.deckHash,
+  };
+  $("#spikeStatus").textContent = `Running ${request.command}…`;
+  const result = await api("/api/editor-command", { method: "POST", body: JSON.stringify(request) });
+  state.project = result as ProjectState;
+  state.selectedIds = result.nextSelectionIds ?? state.selectedIds;
+  renderAll();
+  $("#spikeStatus").textContent = `${result.commandReason ?? request.command} · version updated${result.reflowedContainerIds?.length ? ` · reflow ${result.reflowedContainerIds.join(", ")}` : ""}`;
+  return result;
+}
+
 function selectionMoveBounds(): { minDx: number; maxDx: number; minDy: number; maxDy: number } {
   const canvas = state.project?.deck.canvas ?? { widthDU: 1920, heightDU: 1080 };
   const geometries = Object.values(state.baseGeometry);
@@ -227,6 +259,8 @@ function selectionMoveBounds(): { minDx: number; maxDx: number; minDy: number; m
 }
 
 function installPitchPointerDrag(scene: HTMLElement, stage: HTMLElement): void {
+  if (scene.dataset.pitchPointerDragInstalled === "true") return;
+  scene.dataset.pitchPointerDragInstalled = "true";
   scene.addEventListener("pointerdown", (event: PointerEvent) => {
     if (event.button !== 0 || !state.selectedIds.length) return;
     const target = (event.target as Element | null)?.closest<HTMLElement>(".selectable");
@@ -431,6 +465,15 @@ async function load(): Promise<void> {
   installViewportAndGuides();
   $("#spikeStatus").textContent = "Pitch pointer engine + Daybrush controls attached to live SceneGraph";
 }
+
+(window as any).__pitchEditorRuntime = {
+  getProject: () => state.project,
+  getSlide: () => currentSlide(),
+  getSelectedIds: () => [...state.selectedIds],
+  select: (ids: string[]) => updateSelection(ids),
+  command: (input: AnyRecord) => runEditorCommand(input),
+  reload: () => load(),
+};
 
 $("#spikeClearSelection").addEventListener("click", () => updateSelection([]));
 $("#spikeRefresh").addEventListener("click", () => void load());

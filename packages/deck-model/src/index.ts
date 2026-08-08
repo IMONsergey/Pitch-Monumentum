@@ -71,11 +71,7 @@ export interface PresentationBrief {
   artifactAfterlife?: string;
   sourceDivergence: string;
   readingMode: "presentation" | "balanced" | "reader";
-  pageBudget: {
-    min: number;
-    target: number;
-    max: number;
-  };
+  pageBudget: { min: number; target: number; max: number };
   mustInclude: string[];
   mustNotChange: string[];
   brandConstraints: string[];
@@ -143,6 +139,90 @@ export interface Geometry {
   rotation?: number;
 }
 
+export interface NoPaint {
+  kind: "none";
+}
+
+export interface SolidPaint {
+  kind: "solid";
+  color: string;
+  opacity?: number;
+}
+
+export interface GradientStop {
+  position: number;
+  color: string;
+  opacity?: number;
+}
+
+export interface LinearGradientPaint {
+  kind: "linearGradient";
+  angleDeg: number;
+  stops: GradientStop[];
+}
+
+export type Paint = NoPaint | SolidPaint | LinearGradientPaint;
+
+export interface StrokeStyle {
+  color: string;
+  widthDU: number;
+  dash?: "solid" | "dash" | "dot";
+}
+
+export interface DropShadowEffect {
+  kind: "dropShadow";
+  color: string;
+  opacity: number;
+  blurDU: number;
+  offsetXDU: number;
+  offsetYDU: number;
+}
+
+export type VisualEffect = DropShadowEffect;
+
+export type VectorPathCommand =
+  | { command: "M"; x: number; y: number }
+  | { command: "L"; x: number; y: number }
+  | { command: "C"; x1: number; y1: number; x2: number; y2: number; x: number; y: number }
+  | { command: "Q"; x1: number; y1: number; x: number; y: number }
+  | { command: "Z" };
+
+export interface VectorPathData {
+  commands: VectorPathCommand[];
+  fillRule?: "nonzero" | "evenodd";
+}
+
+export interface AutoLayoutPadding {
+  top: number;
+  right: number;
+  bottom: number;
+  left: number;
+}
+
+export type AutoLayoutSizing = "fixed" | "hug" | "fill";
+
+export interface LayoutItemSpec {
+  width?: AutoLayoutSizing;
+  height?: AutoLayoutSizing;
+  grow?: number;
+  alignSelf?: "auto" | "start" | "center" | "end" | "stretch";
+  minWidthDU?: number;
+  maxWidthDU?: number;
+  minHeightDU?: number;
+  maxHeightDU?: number;
+}
+
+export interface AutoLayoutSpec {
+  direction: "horizontal" | "vertical";
+  gapDU: number;
+  padding: AutoLayoutPadding;
+  justify: "start" | "center" | "end" | "spaceBetween" | "spaceAround" | "spaceEvenly";
+  align: "start" | "center" | "end" | "stretch";
+  wrap?: boolean;
+  widthSizing?: "fixed" | "hug";
+  heightSizing?: "fixed" | "hug";
+}
+
 export interface ElementDependency {
   kind: "claim" | "evidence" | "asset" | "designToken" | "dataset";
   id: string;
@@ -172,7 +252,9 @@ export interface SceneElementBase {
   zIndex: number;
   locked?: boolean;
   groupId?: string;
+  layoutItem?: LayoutItemSpec;
   opacity?: number;
+  effects?: VisualEffect[];
   origin: ElementOrigin;
   exportStrategy: ExportStrategy;
   dependencies: ElementDependency[];
@@ -219,9 +301,14 @@ export interface ImageElement extends SceneElementBase {
 export interface ShapeElement extends SceneElementBase {
   type: "shape";
   shape: "rect" | "roundRect" | "ellipse" | "triangle" | "custom";
+  /** Legacy solid fill shorthand. fillPaint takes precedence when present. */
   fill?: string;
-  stroke?: { color: string; widthDU: number; dash?: "solid" | "dash" | "dot" };
+  fillPaint?: Paint;
+  stroke?: StrokeStyle;
   radiusDU?: number;
+  /** Structured local-coordinate path data used by the vector editor. */
+  pathData?: VectorPathData;
+  /** Legacy/raw SVG path fallback. pathData takes precedence when present. */
   svgPath?: string;
 }
 
@@ -229,7 +316,7 @@ export interface LineElement extends SceneElementBase {
   type: "line";
   start: [number, number];
   end: [number, number];
-  stroke: { color: string; widthDU: number; dash?: "solid" | "dash" | "dot" };
+  stroke: StrokeStyle;
   startMarker?: "none" | "arrow" | "dot";
   endMarker?: "none" | "arrow" | "dot";
 }
@@ -297,6 +384,19 @@ export interface DiagramElement extends SceneElementBase {
 export interface GroupElement extends SceneElementBase {
   type: "group";
   childIds: string[];
+  layout?: AutoLayoutSpec;
+}
+
+export interface FrameElement extends SceneElementBase {
+  type: "frame";
+  childIds: string[];
+  layout?: AutoLayoutSpec;
+  /** Legacy solid fill shorthand. fillPaint takes precedence when present. */
+  fill?: string;
+  fillPaint?: Paint;
+  stroke?: StrokeStyle;
+  radiusDU?: number;
+  clipContent?: boolean;
 }
 
 export interface VideoElement extends SceneElementBase {
@@ -315,6 +415,7 @@ export type SceneElement =
   | IconElement
   | DiagramElement
   | GroupElement
+  | FrameElement
   | VideoElement;
 
 export type SlideArchetype =

@@ -7,21 +7,31 @@
   "engines": {"node": ">=22"},
   "scripts": {
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "build:editor-spike": "esbuild apps/editor-spike/src/client.ts --bundle --format=iife --platform=browser --target=es2022 --outfile=apps/workspace/public/editor-spike.js",
+    "build:editor-spike": "esbuild apps/editor-spike/src/bootstrap.ts --bundle --format=iife --platform=browser --target=es2022 --outfile=apps/workspace/public/editor-spike.js",
     "build": "tsc -p tsconfig.build.json && npm run build:editor-spike",
     "test": "npm run build && node --test dist/tests/*.test.js",
-    "test:editor-e2e": "npm run build && node dist/tests/editor-spike.e2e.js",
+    "test:editor-e2e": "npm run build && node --test --test-concurrency=1 dist/tests/*.e2e.js",
     "check": "npm run typecheck && npm run test",
     "demo": "npm run build && node dist/apps/cli/src/index.js demo .pitch-demo",
     "status": "npm run build && node dist/apps/cli/src/index.js status .pitch-demo",
     "serve": "npm run build && node dist/apps/demo/src/server.js .pitch-demo 4173",
-    "workspace": "npm run build && node dist/apps/workspace/src/server.js .pitch-demo 4173"
+    "workspace": "npm run build && node dist/apps/workspace/src/server.js .pitch-demo 4173",
+    "pitch:mcp": "npm run build && node dist/apps/pitch-mcp/src/server.js .pitch-demo"
   },
   "dependencies": {
+    "@lexical/history": "^0.48.0",
+    "@lexical/list": "^0.48.0",
+    "@lexical/rich-text": "^0.48.0",
+    "@lexical/selection": "^0.48.0",
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "@scena/guides": "^0.29.2",
     "infinite-viewer": "^0.29.1",
+    "lexical": "^0.48.0",
     "moveable": "^0.53.0",
-    "selecto": "^1.26.3"
+    "perfect-freehand": "^1.2.2",
+    "selecto": "^1.26.3",
+    "yoga-layout": "^3.2.1",
+    "zod": "^4.2.0"
   },
   "devDependencies": {
     "@types/node": "^22.20.1",
