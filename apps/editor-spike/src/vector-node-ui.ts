@@ -52,19 +52,42 @@ function ensureOverlay(): SVGSVGElement | null {
   return overlay;
 }
 
+function affine() {
+  if (!sourceBounds || !sourceGeometry) return undefined;
+  const sx = sourceGeometry.width / Math.max(.000001, sourceBounds.width);
+  const sy = sourceGeometry.height / Math.max(.000001, sourceBounds.height);
+  const radians = (sourceGeometry.rotation ?? 0) * Math.PI / 180;
+  const cos = Math.cos(radians);
+  const sin = Math.sin(radians);
+  const cx = sourceGeometry.x + sourceGeometry.width / 2;
+  const cy = sourceGeometry.y + sourceGeometry.height / 2;
+  const bcx = sourceBounds.left + sourceBounds.width / 2;
+  const bcy = sourceBounds.top + sourceBounds.height / 2;
+  const a = cos * sx;
+  const b = sin * sx;
+  const c = -sin * sy;
+  const d = cos * sy;
+  const e = cx - a * bcx - c * bcy;
+  const f = cy - b * bcx - d * bcy;
+  return { sx, sy, radians, cos, sin, cx, cy, bcx, bcy, a, b, c, d, e, f };
+}
+
 function localToSlide(x: number, y: number): { x: number; y: number } {
-  if (!sourceBounds || !sourceGeometry) return { x, y };
-  return {
-    x: sourceGeometry.x + ((x - sourceBounds.left) / Math.max(.001, sourceBounds.width)) * sourceGeometry.width,
-    y: sourceGeometry.y + ((y - sourceBounds.top) / Math.max(.001, sourceBounds.height)) * sourceGeometry.height,
-  };
+  const m = affine();
+  if (!m) return { x, y };
+  return { x: m.a * x + m.c * y + m.e, y: m.b * x + m.d * y + m.f };
 }
 
 function slideToLocal(x: number, y: number): { x: number; y: number } {
-  if (!sourceBounds || !sourceGeometry) return { x, y };
+  const m = affine();
+  if (!m) return { x, y };
+  const dx = x - m.cx;
+  const dy = y - m.cy;
+  const unrotatedX = dx * m.cos + dy * m.sin;
+  const unrotatedY = -dx * m.sin + dy * m.cos;
   return {
-    x: sourceBounds.left + ((x - sourceGeometry.x) / Math.max(.001, sourceGeometry.width)) * sourceBounds.width,
-    y: sourceBounds.top + ((y - sourceGeometry.y) / Math.max(.001, sourceGeometry.height)) * sourceBounds.height,
+    x: m.bcx + unrotatedX / Math.max(.000001, m.sx),
+    y: m.bcy + unrotatedY / Math.max(.000001, m.sy),
   };
 }
 
@@ -94,9 +117,10 @@ function handleLine(x1: number, y1: number, x2: number, y2: number): SVGLineElem
 
 function renderOverlay(): void {
   const svg = ensureOverlay();
+  const m = affine();
   if (!svg) return;
   svg.innerHTML = "";
-  if (!editingId || !workingPath || !sourceBounds || !sourceGeometry) { svg.style.display = "none"; return; }
+  if (!editingId || !workingPath || !sourceBounds || !sourceGeometry || !m) { svg.style.display = "none"; return; }
   svg.style.display = "block";
 
   const preview = document.createElementNS(NS, "path");
@@ -109,9 +133,7 @@ function renderOverlay(): void {
   preview.dataset.vectorSegmentSurface = "true";
   preview.style.pointerEvents = "stroke";
   preview.style.cursor = "copy";
-  const sx = sourceGeometry.width / Math.max(.001, sourceBounds.width);
-  const sy = sourceGeometry.height / Math.max(.001, sourceBounds.height);
-  preview.setAttribute("transform", `translate(${sourceGeometry.x} ${sourceGeometry.y}) scale(${sx} ${sy}) translate(${-sourceBounds.left} ${-sourceBounds.top})`);
+  preview.setAttribute("transform", `matrix(${m.a} ${m.b} ${m.c} ${m.d} ${m.e} ${m.f})`);
   svg.appendChild(preview);
 
   for (const anchor of vectorAnchors(workingPath)) {
@@ -170,7 +192,7 @@ async function commitVectorPath(reason = "Edit vector nodes"): Promise<void> {
   const id = editingId;
   await editor.command({ command: "setVectorPath", elementId: id, pathData: workingPath, fitBounds: true });
   const refreshed = editableVector();
-  if (refreshed?.pathData && (refreshed.geometry.rotation ?? 0) === 0) {
+  if (refreshed?.pathData) {
     workingPath = structuredClone(refreshed.pathData);
     sourceBounds = vectorPathBounds(refreshed.pathData);
     sourceGeometry = structuredClone(refreshed.geometry);
@@ -213,10 +235,6 @@ function enter(elementId: string): void {
   const slide = editor?.getSlide();
   const element = slide?.scene?.find((item: AnyRecord) => item.id === elementId);
   if (!element?.pathData) return;
-  if ((element.geometry.rotation ?? 0) !== 0) {
-    status("Edit Vector · rotated node editing is deferred to Vector Engine v1.1; reset rotation before editing points");
-    return;
-  }
   editingId = elementId;
   workingPath = structuredClone(element.pathData);
   sourceBounds = vectorPathBounds(element.pathData);
@@ -224,7 +242,7 @@ function enter(elementId: string): void {
   selectedAnchor = null;
   editor?.select([elementId]);
   renderOverlay();
-  status("Edit Vector · drag anchors/handles · double-click segment adds point · Delete removes point · Esc exits");
+  status(`Edit Vector${(element.geometry.rotation ?? 0) ? ` · rotated ${element.geometry.rotation}°` : ""} · drag anchors/handles · double-click segment adds point · Delete removes point · Esc exits`);
 }
 
 function exit(): void {
