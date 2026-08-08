@@ -1,8 +1,2 @@
-import { contextBridge, ipcRenderer } from "electron";
-
-contextBridge.exposeInMainWorld("pitchDesktop", {
-  exportPdf: () => ipcRenderer.invoke("pitch:delivery:pdf"),
-  exportPng: () => ipcRenderer.invoke("pitch:delivery:png"),
-  reveal: (path: string) => ipcRenderer.invoke("pitch:delivery:reveal", path),
-  platform: process.platform,
-});
+// Legacy compatibility entrypoint. New packaging uses apps/desktop-runtime/preload.
+import "../../desktop-runtime/src/preload.js";
