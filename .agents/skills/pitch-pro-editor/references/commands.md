@@ -2,110 +2,137 @@
 
 Use this reference after reading `pitch_project_state`.
 
-## Object commands
+## Canonical object commands — `pitch_editor_command`
 
 ### nudge
-Use for keyboard-like movement.
 Required: `slideId`, `selectedIds`, `dx`, `dy`.
-Prefer small exact DU deltas when the user gives a precise adjustment.
+Use for exact keyboard-like movement.
 
 ### align
 Required: `slideId`, `selectedIds`, `alignment`.
-Alignment values: `left`, `horizontalCenter`, `right`, `top`, `verticalCenter`, `bottom`.
+Values: `left`, `horizontalCenter`, `right`, `top`, `verticalCenter`, `bottom`.
 
 ### distribute
 Required: `slideId`, `selectedIds`, `axis`.
-Axis: `horizontal` or `vertical`.
-Use only for 3+ selected root objects.
+Axis: `horizontal` or `vertical`. Use for 3+ selected root objects.
 
-### duplicate
-Required: `slideId`, `selectedIds`.
-Optional `offsetDU`.
-Returns new stable IDs; re-read state before editing the duplicate.
-
-### delete
-Required: `slideId`, `selectedIds`.
-Deleting a selected container also removes its selected closure according to current editor command semantics.
-
-### group / ungroup
-Required: `slideId`, `selectedIds`.
-Grouping preserves parent and sibling order when selected siblings share a parent.
-
-### arrange
-Required: `slideId`, `selectedIds`, `arrangement`.
-Values: `bringToFront`, `bringForward`, `sendBackward`, `sendToBack`.
-
-### lock
-Required: `slideId`, `selectedIds`, `locked`.
-Do not unlock without explicit user intent.
+### duplicate / delete / group / ungroup / arrange / lock
+Operate only on selected roots and canonical hierarchy. `arrange` accepts `bringToFront`, `bringForward`, `sendBackward`, `sendToBack`.
+Never silently unlock an object.
 
 ### setInspector
 Required: `slideId`, `elementId`.
-At least one of:
-- `geometry`: x/y/width/height/rotation
-- `presentation`: name/opacity/locked
-- `textStyle`: fontFamily/fontSizePt/color/bold/italic/underline/letterSpacingPt
+May atomically include geometry, presentation and text-style patches. Prefer this for exact X/Y/W/H/rotation/opacity/type values.
 
-This is the preferred exact-properties command. It should be one atomic version even when changing several fields.
+### insertText / insertShape / insertFrame
+Create basic editable native scene objects. Use the returned selection IDs rather than guessing generated IDs.
 
-### insertText
-Required: `slideId`, `geometry`.
-Optional `text`.
-
-### insertShape
-Required: `slideId`, `geometry`.
-Optional `shape`, `fill`.
-Supported basic shapes depend on the active tool schema.
-
-### insertFrame
-Required: `slideId`, `geometry`.
-Optional `fill`.
-
-## Storyboard commands
+## Storyboard commands — `pitch_editor_command`
 
 ### newSlide
-Optional: `afterSlideId`, `title`.
-Returns `nextSlideId`.
+Optional: `afterSlideId`, `title`. Returns `nextSlideId`.
 
 ### duplicateSlide
-Required: `slideId`.
-Deep-clones scene hierarchy with new IDs and returns `nextSlideId`.
-Claims/evidence/assets stay linked; QA issue IDs do not carry over.
+Required: `slideId`. Deep-clones scene hierarchy with new IDs. Claims/evidence/assets remain linked; QA issue IDs do not carry over.
 
 ### deleteSlide
-Required: `slideId`.
-Fails if this would remove the last slide.
+Required: `slideId`. Fails if this would remove the last slide.
 
 ### moveSlide
-Required: `slideId`, `toIndex`.
-`toIndex` is zero-based.
+Required: `slideId`, zero-based `toIndex`.
 
 ### renameSlide
 Required: `slideId`, non-empty `title`.
 
-## History
+## Image/media — `pitch_media_command`
 
-### pitch_undo
-Branch-local undo to the previous canonical deck head.
-Use after an unintended mutation rather than manually reversing geometry.
+Use this tool instead of raw image-object edits.
 
-### pitch_redo
-Branch-local redo when available.
+### setImageFit
+Required: `slideId`, `elementId`, `fit`.
+Fit values: `cover`, `contain`, `stretch`.
+
+### setImageCrop
+Required: `slideId`, `elementId`, `crop`.
+Crop uses normalized `left`, `top`, `right`, `bottom` values from 0 to <1. Opposing sides must leave visible width/height. Pass `null` to reset crop.
+
+### replaceImageAsset
+Required: `slideId`, `elementId`, `assetId`. Optional `alt`.
+Preserves the image object, geometry, dependencies and editability.
+
+### setImageCornerRadius
+Required: `slideId`, `elementId`, `cornerRadiusDU`.
+Use `null` to remove the explicit radius.
+
+The visual editor may batch fit/crop/asset/radius into one canonical version; MCP currently exposes the bounded media commands above.
+
+## Motion — `pitch_motion_command`
+
+Motion lives in a branch-local `MotionDocument`, not in transient DOM/CSS. Read `motion`, `motionHash` and `motionHistory` from `pitch_project_state` first.
+
+### setSlideTransition
+Required: `slideId`, `transition`.
+Transition types: `none`, `fade`, `push`, `wipe`, `dissolve`. Pass `null` to remove the transition.
+
+### addBuild
+Required: `slideId`, `elementIds`, `kind`, `effect`, `trigger`, `durationMs`.
+Kinds: `entrance`, `emphasis`, `exit`.
+Effects: `appear`, `fade`, `scale`, `slide`, `wipe`, `pulse`.
+Triggers: `onClick`, `withPrevious`, `afterPrevious`.
+Optional: delay/direction/distance/easing/buildId.
+
+### updateBuild / deleteBuild / reorderBuild
+Use stable `buildId` handles from current motion state. `toIndex` is zero-based.
+
+### setTrack
+Required: `slideId`, `elementId`, `property`, `keyframes`.
+Properties: `x`, `y`, `width`, `height`, `rotation`, `opacity`, `scaleX`, `scaleY`.
+Each keyframe has `timeMs`, `value`, optional easing.
+
+### deleteTrack
+Required: `slideId`, `trackId`.
+
+### clearSlideMotion
+Required: `slideId`. Clears that slide's transition/builds/tracks only.
+
+### pitch_motion_undo / pitch_motion_redo
+Motion history is intentionally independent from deck history. Use these for animation mistakes; do not call `pitch_undo` unless the deck itself should change.
+
+## Components — `pitch_component_command`
+
+Component definitions are branch-aware artifacts, not pasted UI templates.
+
+### createFromSelection
+Required: `slideId`, `selectedIds`, `name`.
+Optional: `componentId`, `description`.
+The authoring layer closes selected frame/group descendants, localizes geometry and detects text/image/fill/stroke slots.
+
+### insert
+Required: `slideId`, `componentId`, `transform` (`x`, `y`, optional scaleX/scaleY).
+Optional: `overrides`, `instanceId`.
+Returns the created instance and selection IDs. Re-read state because instance element IDs are new.
+
+### detach
+Required: `slideId`, `instanceId`.
+Removes component linkage tags but keeps the instantiated scene objects editable.
+
+## Deck history
+
+### pitch_undo / pitch_redo
+Branch-local history for canonical deck versions. Use immediately after an unintended deck mutation rather than reverse-math edits.
 
 ## State-reading discipline
 
-`pitch_project_state` is intentionally compact. It provides handles and geometry but not every large object payload or asset byte.
+`pitch_project_state` is intentionally compact for deck objects, while returning canonical motion state and reusable component summaries. Re-read after operations that change IDs, hierarchy, slide order, component instances or history heads.
 
-When a task requires deep chart/table/text/vector contents, use the narrow scoped-read capability available in the current Pitch toolset rather than requesting the full deck or files.
+When a task needs deep text/chart/table/vector data, use the narrow scoped-read capabilities in the active Pitch toolset rather than asking for raw project files.
 
-## Commands staged in the codebase but not yet in the live MCP schema
+## Implemented below the transport but not yet in this MCP schema
 
-Do **not** call these until they appear in `pitch_editor_command` or a dedicated tool:
-- custom vector insertion (Pen/Pencil backend builder exists)
-- chart data editing
-- table structural editing
-- image crop/fit commands
-- motion timeline editing
-- component instance operations
+Do **not** invent these tool calls:
+- custom vector insertion through `pitch_editor_command` (Pen/Pencil engine exists in the editor);
+- chart data editing through this MCP tool family;
+- table structural editing through this MCP tool family;
+- the visual editor's atomic multi-property image batch command.
 
-The implementation may exist in packages before transport integration. Treat the live tool schema as authoritative.
+Treat the live MCP schema as authoritative even when a lower-level package already exists.
