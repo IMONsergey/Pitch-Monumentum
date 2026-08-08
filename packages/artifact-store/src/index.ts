@@ -41,6 +41,10 @@ async function atomicJsonWrite(path: string, value: unknown): Promise<void> {
   await rename(temp, path);
 }
 
+function cloneHeads(heads: Record<string, BranchArtifactHead>): Record<string, BranchArtifactHead> {
+  return structuredClone(heads);
+}
+
 export class ArtifactStore {
   readonly root: string;
   constructor(root: string) { this.root = root; }
@@ -120,14 +124,33 @@ export class ArtifactStore {
     const parentId = parentBranchId ?? manifest.activeBranchId;
     const parent = manifest.branches[parentId];
     if (!parent) throw new Error(`Unknown parent branch: ${parentId}`);
+    return this.forkBranchFromSnapshot(name, parent.heads, parentId, manifest);
+  }
+
+  async forkBranchFromSnapshot(
+    name: string,
+    snapshotHeads: Record<string, BranchArtifactHead>,
+    parentBranchId?: string,
+    currentManifest?: ProjectManifest,
+  ): Promise<string> {
+    if (!name.trim()) throw new Error("Branch name is required");
+    const manifest = currentManifest ?? await this.readManifest();
+    const parentId = parentBranchId ?? manifest.activeBranchId;
+    if (!manifest.branches[parentId]) throw new Error(`Unknown parent branch: ${parentId}`);
+    for (const head of Object.values(snapshotHeads)) {
+      const meta = manifest.artifacts[head.id];
+      if (!meta) throw new Error(`Snapshot references unknown artifact ${head.id}`);
+      if (meta.kind !== head.kind) throw new Error(`Snapshot artifact kind mismatch for ${head.id}: ${head.kind} vs ${meta.kind}`);
+      if (head.version < 1 || head.version > meta.latestVersion) throw new Error(`Snapshot references invalid version ${head.version} for ${head.id}`);
+    }
     const id = `branch_${randomUUID()}`;
     manifest.branches[id] = {
       id,
-      name,
+      name: name.trim(),
       parentBranchId: parentId,
       createdAt: new Date().toISOString(),
-      heads: structuredClone(parent.heads),
-      baseHeads: structuredClone(parent.heads),
+      heads: cloneHeads(snapshotHeads),
+      baseHeads: cloneHeads(snapshotHeads),
     };
     manifest.activeBranchId = id;
     manifest.updatedAt = new Date().toISOString();
