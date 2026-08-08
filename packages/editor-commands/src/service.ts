@@ -1,6 +1,7 @@
-import type { DeckDocument, Geometry, Paint, SceneElement, SlideDocument, TextRun, VisualEffect } from "../../deck-model/src/index.js";
+import type { DeckDocument, Geometry, SceneElement, SlideDocument, TextRun, VectorPathData } from "../../deck-model/src/index.js";
 import { autoLayoutMutationOperations } from "../../auto-layout/src/index.js";
 import { applyDeckMutation, createMutation, type DeckMutationOperation, type ElementAppearancePatch, type ElementStylePatch } from "../../mutations/src/index.js";
+import { validateVectorPathData, vectorPathToSvg } from "../../vector-engine/src/index.js";
 import {
   alignSelection,
   arrangeSelection,
@@ -47,7 +48,8 @@ export type EditorCommandInput =
   | { command: "setInspector"; slideId: string; elementId: string; geometry?: Partial<Geometry>; presentation?: PresentationPatch; textStyle?: TextStylePatch; style?: ElementStylePatch; appearance?: ElementAppearancePatch }
   | { command: "insertText"; slideId: string; geometry: Geometry; text?: string }
   | { command: "insertShape"; slideId: string; geometry: Geometry; shape?: "rect" | "roundRect" | "ellipse" | "triangle"; fill?: string }
-  | { command: "insertFrame"; slideId: string; geometry: Geometry; fill?: string };
+  | { command: "insertFrame"; slideId: string; geometry: Geometry; fill?: string }
+  | { command: "insertVector"; slideId: string; geometry: Geometry; pathData: VectorPathData; fill?: string; stroke?: { color: string; widthDU: number; dash?: "solid" | "dash" | "dot" }; name?: string };
 
 export interface ExecutedEditorCommand {
   reason: string;
@@ -74,11 +76,7 @@ function maxZ(slide: SlideDocument): number {
 }
 
 function resultForInsert(element: SceneElement): EditorCommandResult {
-  return {
-    operations: [{ op: "addElement", slideId: "", element }],
-    nextSelectionIds: [element.id],
-    affectedAutoLayoutContainerIds: [],
-  };
+  return { operations: [{ op: "addElement", slideId: "", element }], nextSelectionIds: [element.id], affectedAutoLayoutContainerIds: [] };
 }
 
 function layoutParentIds(slide: SlideDocument, elementId: string): string[] {
@@ -122,26 +120,19 @@ function stylePatch(element: SceneElement, style: ElementStylePatch): ElementSty
     if (style.radiusDU !== undefined && style.radiusDU !== null && (!Number.isFinite(style.radiusDU) || style.radiusDU < 0)) throw new Error("radiusDU must be zero or greater");
   } else if (style.kind === "image") {
     if (style.cornerRadiusDU !== undefined && style.cornerRadiusDU !== null && (!Number.isFinite(style.cornerRadiusDU) || style.cornerRadiusDU < 0)) throw new Error("cornerRadiusDU must be zero or greater");
-  } else {
-    validateStroke(style.stroke);
-  }
+  } else validateStroke(style.stroke);
   return structuredClone(style);
 }
 
 function appearancePatch(element: SceneElement, appearance: ElementAppearancePatch): ElementAppearancePatch {
-  if ((appearance.fillPaint !== undefined || appearance.clearFillPaint) && element.type !== "shape" && element.type !== "frame") {
-    throw new Error(`Element ${element.id} cannot have fillPaint`);
-  }
+  if ((appearance.fillPaint !== undefined || appearance.clearFillPaint) && element.type !== "shape" && element.type !== "frame") throw new Error(`Element ${element.id} cannot have fillPaint`);
   return structuredClone(appearance);
 }
 
 function styledParagraphs(element: Extract<SceneElement, { type: "text" }>, style: TextStylePatch) {
   if (style.fontSizePt !== undefined && (!Number.isFinite(style.fontSizePt) || style.fontSizePt <= 0)) throw new Error("fontSizePt must be greater than zero");
   if (style.letterSpacingPt !== undefined && !Number.isFinite(style.letterSpacingPt)) throw new Error("letterSpacingPt must be finite");
-  return element.paragraphs.map((paragraph) => ({
-    ...paragraph,
-    runs: paragraph.runs.map((run) => ({ ...run, ...style })),
-  }));
+  return element.paragraphs.map((paragraph) => ({ ...paragraph, runs: paragraph.runs.map((run) => ({ ...run, ...style })) }));
 }
 
 function dispatch(slide: SlideDocument, input: Exclude<EditorCommandInput, { command: "copy" }>): EditorCommandResult {
@@ -157,75 +148,43 @@ function dispatch(slide: SlideDocument, input: Exclude<EditorCommandInput, { com
     case "paste": return pasteClipboard(slide, input.clipboard, input.offsetDU);
     case "lock": {
       const roots = selectionRoots(slide, input.selectedIds);
-      return {
-        operations: roots.map((elementId) => ({ op: "updateElementPresentation" as const, slideId: slide.id, elementId, changes: { locked: input.locked } })),
-        nextSelectionIds: input.locked ? [] : roots,
-        affectedAutoLayoutContainerIds: [],
-      };
+      return { operations: roots.map((elementId) => ({ op: "updateElementPresentation" as const, slideId: slide.id, elementId, changes: { locked: input.locked } })), nextSelectionIds: input.locked ? [] : roots, affectedAutoLayoutContainerIds: [] };
     }
     case "setGeometry": {
       elementById(slide, input.elementId);
-      return {
-        operations: [{ op: "updateGeometry", slideId: slide.id, elementId: input.elementId, geometry: finiteGeometryPatch(input.geometry) }],
-        nextSelectionIds: [input.elementId],
-        affectedAutoLayoutContainerIds: layoutParentIds(slide, input.elementId),
-      };
+      return { operations: [{ op: "updateGeometry", slideId: slide.id, elementId: input.elementId, geometry: finiteGeometryPatch(input.geometry) }], nextSelectionIds: [input.elementId], affectedAutoLayoutContainerIds: layoutParentIds(slide, input.elementId) };
     }
     case "setPresentation": {
       elementById(slide, input.elementId);
       const changes = presentationPatch(input.changes);
-      return {
-        operations: [{ op: "updateElementPresentation", slideId: slide.id, elementId: input.elementId, changes }],
-        nextSelectionIds: changes.locked ? [] : [input.elementId],
-        affectedAutoLayoutContainerIds: [],
-      };
+      return { operations: [{ op: "updateElementPresentation", slideId: slide.id, elementId: input.elementId, changes }], nextSelectionIds: changes.locked ? [] : [input.elementId], affectedAutoLayoutContainerIds: [] };
     }
     case "setTextStyle": {
       const element = elementById(slide, input.elementId);
       if (element.type !== "text") throw new Error(`Element ${input.elementId} is not text`);
-      return {
-        operations: [{ op: "replaceText", slideId: slide.id, elementId: input.elementId, paragraphs: styledParagraphs(element, input.style) }],
-        nextSelectionIds: [input.elementId],
-        affectedAutoLayoutContainerIds: layoutParentIds(slide, input.elementId),
-      };
+      return { operations: [{ op: "replaceText", slideId: slide.id, elementId: input.elementId, paragraphs: styledParagraphs(element, input.style) }], nextSelectionIds: [input.elementId], affectedAutoLayoutContainerIds: layoutParentIds(slide, input.elementId) };
     }
     case "setStyle": {
       const element = elementById(slide, input.elementId);
-      return {
-        operations: [{ op: "updateElementStyle", slideId: slide.id, elementId: input.elementId, style: stylePatch(element, input.style) }],
-        nextSelectionIds: [input.elementId],
-        affectedAutoLayoutContainerIds: [],
-      };
+      return { operations: [{ op: "updateElementStyle", slideId: slide.id, elementId: input.elementId, style: stylePatch(element, input.style) }], nextSelectionIds: [input.elementId], affectedAutoLayoutContainerIds: [] };
     }
     case "setAppearance": {
       const element = elementById(slide, input.elementId);
-      return {
-        operations: [{ op: "updateElementAppearance", slideId: slide.id, elementId: input.elementId, appearance: appearancePatch(element, input.appearance) }],
-        nextSelectionIds: [input.elementId],
-        affectedAutoLayoutContainerIds: [],
-      };
+      return { operations: [{ op: "updateElementAppearance", slideId: slide.id, elementId: input.elementId, appearance: appearancePatch(element, input.appearance) }], nextSelectionIds: [input.elementId], affectedAutoLayoutContainerIds: [] };
     }
     case "setInspector": {
       const element = elementById(slide, input.elementId);
       const operations: DeckMutationOperation[] = [];
-      if (input.geometry && Object.keys(input.geometry).length) {
-        operations.push({ op: "updateGeometry", slideId: slide.id, elementId: input.elementId, geometry: finiteGeometryPatch(input.geometry) });
-      }
+      if (input.geometry && Object.keys(input.geometry).length) operations.push({ op: "updateGeometry", slideId: slide.id, elementId: input.elementId, geometry: finiteGeometryPatch(input.geometry) });
       const presentation = input.presentation ? presentationPatch(input.presentation) : undefined;
-      if (presentation && Object.keys(presentation).length) {
-        operations.push({ op: "updateElementPresentation", slideId: slide.id, elementId: input.elementId, changes: presentation });
-      }
+      if (presentation && Object.keys(presentation).length) operations.push({ op: "updateElementPresentation", slideId: slide.id, elementId: input.elementId, changes: presentation });
       if (input.textStyle && Object.keys(input.textStyle).length) {
         if (element.type !== "text") throw new Error(`Element ${input.elementId} is not text`);
         operations.push({ op: "replaceText", slideId: slide.id, elementId: input.elementId, paragraphs: styledParagraphs(element, input.textStyle) });
       }
       if (input.style) operations.push({ op: "updateElementStyle", slideId: slide.id, elementId: input.elementId, style: stylePatch(element, input.style) });
       if (input.appearance) operations.push({ op: "updateElementAppearance", slideId: slide.id, elementId: input.elementId, appearance: appearancePatch(element, input.appearance) });
-      return {
-        operations,
-        nextSelectionIds: presentation?.locked ? [] : [input.elementId],
-        affectedAutoLayoutContainerIds: input.geometry ? layoutParentIds(slide, input.elementId) : [],
-      };
+      return { operations, nextSelectionIds: presentation?.locked ? [] : [input.elementId], affectedAutoLayoutContainerIds: input.geometry ? layoutParentIds(slide, input.elementId) : [] };
     }
     case "insertText": {
       const element = createTextElement({ geometry: input.geometry, zIndex: maxZ(slide) + 1, paragraphs: [{ runs: [{ text: input.text ?? "Text", fontSizePt: 24, color: "#111111" }] }] });
@@ -237,6 +196,21 @@ function dispatch(slide: SlideDocument, input: Exclude<EditorCommandInput, { com
     }
     case "insertFrame": {
       const element = createFrameElement({ geometry: input.geometry, zIndex: maxZ(slide) + 1, fill: input.fill });
+      return resultForInsert(element);
+    }
+    case "insertVector": {
+      validateVectorPathData(input.pathData);
+      const element = createShapeElement({
+        geometry: input.geometry,
+        zIndex: maxZ(slide) + 1,
+        name: input.name ?? "Vector",
+        shape: "custom",
+        exportStrategy: "vector",
+        fill: input.fill ?? "#111111",
+        stroke: input.stroke,
+        pathData: structuredClone(input.pathData),
+        svgPath: vectorPathToSvg(input.pathData),
+      });
       return resultForInsert(element);
     }
   }
@@ -264,6 +238,7 @@ function reasonFor(input: EditorCommandInput): string {
     case "insertText": return "Insert text";
     case "insertShape": return "Insert shape";
     case "insertFrame": return "Insert frame";
+    case "insertVector": return "Insert vector";
   }
 }
 
