@@ -5,8 +5,7 @@ import { effectiveFillPaint } from "../../appearance/src/index.js";
 import { compileDeckWithNativeCharts, type ChartCompileResult } from "../../pptx-charts/src/index.js";
 import type { RichAssetMap } from "../../pptx-rich/src/index.js";
 import { readZipMap, writeZipMap } from "../../source-ingest/src/zip.js";
-import { effectiveVectorSvgPath } from "../../vector-engine/src/index.js";
-import { vectorPathBounds } from "../../vector-path/src/index.js";
+import { vectorPathBounds, vectorPathToSvg } from "../../vector-path/src/index.js";
 
 const IMAGE_REL = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image";
 const REL_NS = "http://schemas.openxmlformats.org/package/2006/relationships";
@@ -36,7 +35,7 @@ function customPaths(deck: DeckDocument): CustomPathRef[] {
   deck.slides.forEach((slide, slideIndex) => {
     slide.scene.forEach((element) => {
       if (element.type !== "shape" || element.shape !== "custom") return;
-      const svgPath = effectiveVectorSvgPath(element)?.trim();
+      const svgPath = (element.pathData ? vectorPathToSvg(element.pathData) : element.svgPath)?.trim();
       if (!svgPath) throw new Error(`Custom shape ${element.id} is missing pathData/svgPath`);
       const intrinsic = element.pathData
         ? vectorPathBounds(element.pathData)
