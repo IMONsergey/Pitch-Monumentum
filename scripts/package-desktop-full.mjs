@@ -13,6 +13,7 @@ const requiredAfterBuild = [
   "dist/apps/review/src/runtime.js",
   "dist/apps/versions/src/runtime.js",
   "dist/apps/creative-director/src/runtime.js",
+  "dist/apps/system-health/src/runtime.js",
   "dist/apps/pitch-mcp-full/src/server.js",
 ];
 const requiredPublic = [
@@ -26,6 +27,7 @@ const requiredPublic = [
   "apps/workspace/public/review-ui.js",
   "apps/workspace/public/review-governance-ui.js",
   "apps/workspace/public/delivery-ui.js",
+  "apps/workspace/public/system-health-ui.js",
 ];
 
 execFileSync(process.execPath, ["scripts/release-preflight-full.mjs"], { cwd: root, stdio: "inherit" });
