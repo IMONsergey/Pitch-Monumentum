@@ -254,7 +254,19 @@ function deriveTransform(definition: ComponentDefinition, elements: SceneElement
 function equal(a: unknown, b: unknown): boolean { return JSON.stringify(a) === JSON.stringify(b); }
 function inferredOverride(slot: ComponentSlot, current: SceneElement, base: SceneElement): ComponentOverrideValue | undefined {
   if (slot.kind === "text" && current.type === "text" && base.type === "text" && !equal(current.paragraphs, base.paragraphs)) return { kind: "text", paragraphs: structuredClone(current.paragraphs) };
-  if (slot.kind === "image" && current.type === "image" && base.type === "image" && (current.assetId !== base.assetId || current.alt !== base.alt)) return { kind: "image", assetId: current.assetId, alt: current.alt };
+  if (slot.kind === "image" && current.type === "image" && base.type === "image") {
+    const changed = current.assetId !== base.assetId || current.alt !== base.alt || current.fit !== base.fit || !equal(current.crop, base.crop) || !equal(current.focalPoint, base.focalPoint) || current.clipShape !== base.clipShape || current.cornerRadiusDU !== base.cornerRadiusDU;
+    if (changed) return {
+      kind: "image",
+      assetId: current.assetId,
+      alt: current.alt ?? null,
+      fit: current.fit,
+      crop: current.crop ? structuredClone(current.crop) : null,
+      focalPoint: current.focalPoint ? structuredClone(current.focalPoint) : null,
+      clipShape: current.clipShape ?? null,
+      cornerRadiusDU: current.cornerRadiusDU ?? null,
+    };
+  }
   if (slot.kind === "fill" && (current.type === "shape" || current.type === "frame") && (base.type === "shape" || base.type === "frame") && current.fill && current.fill !== base.fill) return { kind: "fill", color: current.fill };
   if (slot.kind === "stroke" && (current.type === "shape" || current.type === "line") && (base.type === "shape" || base.type === "line") && current.stroke && !equal(current.stroke, base.stroke)) return { kind: "stroke", color: current.stroke.color, widthDU: current.stroke.widthDU, dash: current.stroke.dash };
   return undefined;
