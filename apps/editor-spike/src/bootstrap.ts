@@ -9,6 +9,9 @@ import { installPitchVectorUI } from "./vector-ui.js";
 import { installPitchVectorRenderer } from "./vector-render-ui.js";
 import { installPitchVectorNodeUI } from "./vector-node-ui.js";
 import { installPitchSlideUI } from "./slide-ui.js";
+import { installPitchMotionUI } from "./motion-ui.js";
+import { installPitchMediaUI } from "./media-ui.js";
+import { installPitchComponentsUI } from "./components-ui.js";
 import "./client.js";
 
 installPitchRichTextUI();
@@ -22,3 +25,6 @@ installPitchVectorUI();
 installPitchVectorRenderer();
 installPitchVectorNodeUI();
 installPitchSlideUI();
+installPitchMotionUI();
+installPitchMediaUI();
+installPitchComponentsUI();
