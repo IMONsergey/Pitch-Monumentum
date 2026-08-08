@@ -127,6 +127,11 @@ export function createFigmaBridgeDocument(deck: DeckDocument, assets: Record<str
   const warnings: string[] = [];
   for (const slide of deck.slides) for (const element of slide.scene) {
     if ((element.type === "image" || element.type === "icon") && !assets[element.assetId]) warnings.push(`${slide.id}:${element.id} references asset ${element.assetId} without embedded bridge bytes`);
+    if (element.type === "image") {
+      if (element.crop || element.focalPoint) warnings.push(`${slide.id}:${element.id} image crop/focal metadata is preserved in the bridge, but the current importer does not yet claim native Figma CROP/imageTransform parity; validate against the real-app corpus before treating the visual crop as exact`);
+      if (element.clipShape === "ellipse" && Math.abs(element.geometry.width - element.geometry.height) > 1e-6) warnings.push(`${slide.id}:${element.id} non-square ellipse image clipping is preserved as metadata; current rectangle-radius import is only an approximation until a native mask/crop corpus passes`);
+      if (element.fit === "stretch") warnings.push(`${slide.id}:${element.id} stretch image fit has no direct current Figma Plugin ImagePaint scale-mode equivalent; importer keeps the source treatment in metadata and uses an editable approximation`);
+    }
     if (element.type === "video") warnings.push(`${slide.id}:${element.id} video exports as metadata/poster reference; native Figma video parity is not guaranteed`);
     if (element.type === "chart" || element.type === "table" || element.type === "diagram") warnings.push(`${slide.id}:${element.id} ${element.type} remains structured bridge data; importer may expand it into editable primitives`);
   }
