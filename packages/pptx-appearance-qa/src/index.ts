@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import type { DeckDocument, Paint, SceneElement, VisualEffect } from "../../deck-model/src/index.js";
+import { pitchIdFromDescription } from "../../pptx-identity/src/index.js";
 import { readZipMap } from "../../source-ingest/src/zip.js";
 import type { RoundTripIssue } from "../../pptx-roundtrip/src/index.js";
 
@@ -25,6 +26,15 @@ interface InspectedShadow {
 
 function attr(source: string, name: string): string | undefined {
   return source.match(new RegExp(`(?:^|\\s)${name}="([^"]+)"`))?.[1];
+}
+
+function xmlDecode(value: string): string {
+  return value
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&amp;/g, "&");
 }
 
 function colorAndOpacity(body: string): { color: string; opacity: number } | undefined {
@@ -82,22 +92,23 @@ function blocks(source: string, regex: RegExp): string[] {
   return [...source.matchAll(regex)].map((match) => match[0]);
 }
 
-function visualShapes(slide: DeckDocument["slides"][number]): SceneElement[] {
-  return [...slide.scene]
-    .sort((a, b) => a.zIndex - b.zIndex)
-    .filter((element) => (element.type === "shape" && element.shape !== "custom") || (element.type === "frame" && Boolean(element.fill || element.stroke || element.fillPaint)));
+function blockPitchId(block: string): string | undefined {
+  const encoded = block.match(/<p:cNvPr\s+[^>]*descr="([^"]*)"/)?.[1];
+  return pitchIdFromDescription(encoded ? xmlDecode(encoded) : undefined);
 }
 
-function textElements(slide: DeckDocument["slides"][number]): SceneElement[] {
-  return [...slide.scene].sort((a, b) => a.zIndex - b.zIndex).filter((element) => element.type === "text");
-}
-
-function lineElements(slide: DeckDocument["slides"][number]): SceneElement[] {
-  return [...slide.scene].sort((a, b) => a.zIndex - b.zIndex).filter((element) => element.type === "line");
-}
-
-function pictureName(block: string): string | undefined {
-  return block.match(/<p:cNvPr\s+[^>]*name="([^"]*)"/)?.[1];
+function blocksByPitchId(source: string): Map<string, string> {
+  const result = new Map<string, string>();
+  for (const block of [
+    ...blocks(source, /<p:sp>[\s\S]*?<\/p:sp>/g),
+    ...blocks(source, /<p:cxnSp>[\s\S]*?<\/p:cxnSp>/g),
+    ...blocks(source, /<p:pic>[\s\S]*?<\/p:pic>/g),
+    ...blocks(source, /<p:graphicFrame>[\s\S]*?<\/p:graphicFrame>/g),
+  ]) {
+    const id = blockPitchId(block);
+    if (id) result.set(id, block);
+  }
+  return result;
 }
 
 function firstShadow(effects: VisualEffect[] | undefined): Shadow | undefined {
@@ -151,9 +162,21 @@ function shadowDiff(expected: Shadow | undefined, actual: InspectedShadow | unde
   return differences;
 }
 
-function issue(slideId: string, elementId: string, differences: string[]): RoundTripIssue | undefined {
+function issue(slideId: string, elementId: string, kind: RoundTripIssue["kind"], differences: string[]): RoundTripIssue | undefined {
   if (!differences.length) return undefined;
-  return { severity: "major", kind: "shapeStyle", slideId, elementId, message: `Native Appearance drift: ${differences.join("; ")}` };
+  return { severity: "major", kind, slideId, elementId, message: `Native Appearance drift: ${differences.join("; ")}` };
+}
+
+function appearanceSupportedForPptx(element: SceneElement): boolean {
+  if (element.type === "shape" && element.shape === "custom") return false;
+  return ["shape", "frame", "text", "line", "image"].includes(element.type);
+}
+
+function expectedAppearance(element: SceneElement): boolean {
+  return Boolean(
+    ((element.type === "shape" || element.type === "frame") && element.fillPaint)
+    || firstShadow(element.effects),
+  );
 }
 
 export async function validatePptxAppearance(deck: DeckDocument, path: string): Promise<RoundTripIssue[]> {
@@ -164,43 +187,27 @@ export async function validatePptxAppearance(deck: DeckDocument, path: string): 
     const slide = deck.slides[slideIndex];
     const source = entries.get(`ppt/slides/slide${slideIndex + 1}.xml`)?.toString("utf8");
     if (!source) continue;
-    const shapeBlocks = blocks(source, /<p:sp>[\s\S]*?<\/p:sp>/g);
-    const textBlocks = shapeBlocks.filter((block) => /<p:txBody(?:\s|>)/.test(block));
-    const nonTextBlocks = shapeBlocks.filter((block) => !/<p:txBody(?:\s|>)/.test(block));
-    const lineBlocks = blocks(source, /<p:cxnSp>[\s\S]*?<\/p:cxnSp>/g);
-    const pictureBlocks = blocks(source, /<p:pic>[\s\S]*?<\/p:pic>/g);
+    const exported = blocksByPitchId(source);
 
-    const shapes = visualShapes(slide);
-    for (let index = 0; index < Math.min(shapes.length, nonTextBlocks.length); index += 1) {
-      const element = shapes[index];
-      const properties = spPr(nonTextBlocks[index]);
-      const differences = [
-        ...paintDiff((element.type === "shape" || element.type === "frame") ? element.fillPaint : undefined, inspectPaint(properties)),
-        ...shadowDiff(firstShadow(element.effects), inspectShadow(properties)),
-      ];
-      const found = issue(slide.id, element.id, differences);
-      if (found) issues.push(found);
-    }
-
-    const texts = textElements(slide);
-    for (let index = 0; index < Math.min(texts.length, textBlocks.length); index += 1) {
-      const differences = shadowDiff(firstShadow(texts[index].effects), inspectShadow(spPr(textBlocks[index])));
-      const found = issue(slide.id, texts[index].id, differences);
-      if (found) issues.push({ ...found, kind: "textStyle" });
-    }
-
-    const lines = lineElements(slide);
-    for (let index = 0; index < Math.min(lines.length, lineBlocks.length); index += 1) {
-      const differences = shadowDiff(firstShadow(lines[index].effects), inspectShadow(spPr(lineBlocks[index])));
-      const found = issue(slide.id, lines[index].id, differences);
-      if (found) issues.push({ ...found, kind: "lineStyle" });
-    }
-
-    for (const image of slide.scene.filter((element) => element.type === "image" && firstShadow(element.effects))) {
-      const block = pictureBlocks.find((candidate) => pictureName(candidate) === (image.name || image.id));
-      if (!block) continue;
-      const differences = shadowDiff(firstShadow(image.effects), inspectShadow(spPr(block)));
-      const found = issue(slide.id, image.id, differences);
+    for (const element of slide.scene) {
+      if (!appearanceSupportedForPptx(element) || !expectedAppearance(element)) continue;
+      const block = exported.get(element.id);
+      if (!block) {
+        issues.push({
+          severity: "major",
+          kind: "nativeStructure",
+          slideId: slide.id,
+          elementId: element.id,
+          message: `PPTX object with stable Pitch identity ${element.id} is missing while validating Appearance`,
+        });
+        continue;
+      }
+      const properties = spPr(block);
+      const differences: string[] = [];
+      if (element.type === "shape" || element.type === "frame") differences.push(...paintDiff(element.fillPaint, inspectPaint(properties)));
+      differences.push(...shadowDiff(firstShadow(element.effects), inspectShadow(properties)));
+      const kind: RoundTripIssue["kind"] = element.type === "text" ? "textStyle" : element.type === "line" ? "lineStyle" : "shapeStyle";
+      const found = issue(slide.id, element.id, kind, differences);
       if (found) issues.push(found);
     }
   }
