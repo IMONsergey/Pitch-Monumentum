@@ -4,6 +4,7 @@ import { resolve } from "node:path";
 import { createMasterDesignWorkspaceServer } from "./master-design-server.js";
 import { CreativeDirectorRuntime, type CreativeDirectorPreparation } from "../../creative-director/src/runtime.js";
 import { executeCreativeSafeFixes, previewCreativeSafeFixes } from "../../creative-director/src/autofix-runtime.js";
+import { acceptCreativePreview, discardCreativePreview, reviewCreativePreview } from "../../creative-director/src/branch-review.js";
 import type { CreativeChangeRequest } from "../../../packages/creative-director/src/index.js";
 import type { CreativeExecutionBundle } from "../../../packages/creative-director/src/execution.js";
 
@@ -63,7 +64,27 @@ export function createCreativeDirectorWorkspaceServer(projectRoot: string) {
         return;
       }
       if (req.method === "GET" && url.pathname === "/api/creative-review") {
-        json(res, 200, compactReview(await director.review()));
+        const reviewed = await director.review();
+        const activeBranch = reviewed.state.manifest.branches[reviewed.state.manifest.activeBranchId];
+        const previewReview = activeBranch?.parentBranchId ? await reviewCreativePreview(director.service, activeBranch.id).catch((error) => ({ error: error instanceof Error ? error.message : String(error) })) : null;
+        json(res, 200, { ...compactReview(reviewed), previewReview });
+        return;
+      }
+      if (req.method === "GET" && url.pathname === "/api/creative-preview-review") {
+        const branchId = url.searchParams.get("branchId") || (await director.service.state()).manifest.activeBranchId;
+        json(res, 200, await reviewCreativePreview(director.service, branchId));
+        return;
+      }
+      if (req.method === "POST" && url.pathname === "/api/creative-preview-accept") {
+        const input = await body(req) as { previewBranchId: string; expectedTargetDeckHash: string; expectedPreviewDeckHash: string };
+        const result = await acceptCreativePreview(director.service, input);
+        json(res, 200, { review: result.review, acceptedIntoBranchId: result.acceptedIntoBranchId, previewBranchId: result.previewBranchId, deckHash: result.state.deckHash, activeBranchId: result.state.manifest.activeBranchId, history: result.state.history, motionHistory: result.state.motionHistory });
+        return;
+      }
+      if (req.method === "POST" && url.pathname === "/api/creative-preview-discard") {
+        const input = await body(req) as { previewBranchId: string };
+        const result = await discardCreativePreview(director.service, input.previewBranchId);
+        json(res, 200, { review: result.review, discardedPreviewBranchId: result.discardedPreviewBranchId, activeBranchId: result.activeBranchId, deckHash: result.state.deckHash });
         return;
       }
       if (req.method === "GET" && url.pathname === "/api/creative-safe-fixes") {
