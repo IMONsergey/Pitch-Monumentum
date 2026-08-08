@@ -289,10 +289,24 @@ export interface TextElement extends SceneElementBase {
   fitPolicy?: "growBox" | "shrinkText" | "fixed";
 }
 
+export interface ImageFocalPoint {
+  /** Normalized source-space x coordinate from 0 (left) to 1 (right). */
+  x: number;
+  /** Normalized source-space y coordinate from 0 (top) to 1 (bottom). */
+  y: number;
+}
+
+export type ImageClipShape = "rect" | "roundRect" | "ellipse";
+
 export interface ImageElement extends SceneElementBase {
   type: "image";
   assetId: string;
+  /** Non-destructive normalized source crop. Opposing sides must leave visible content. */
   crop?: { left: number; top: number; right: number; bottom: number };
+  /** Normalized source-space point of interest used primarily by cover fitting. */
+  focalPoint?: ImageFocalPoint;
+  /** Native clipping geometry. roundRect uses cornerRadiusDU as the authored radius where supported. */
+  clipShape?: ImageClipShape;
   cornerRadiusDU?: number;
   fit: "cover" | "contain" | "stretch";
   alt?: string;
