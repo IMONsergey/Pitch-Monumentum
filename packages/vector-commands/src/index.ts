@@ -1,10 +1,13 @@
 import { randomUUID } from "node:crypto";
-import type { Geometry, ShapeElement, SlideDocument } from "../../deck-model/src/index.js";
+import type { Geometry, ShapeElement, SlideDocument, VectorPathData } from "../../deck-model/src/index.js";
 import type { DeckMutationOperation } from "../../mutations/src/index.js";
+import { parseSvgPathData, validateVectorPathData, vectorPathToSvg } from "../../vector-path/src/index.js";
 
 export interface InsertVectorInput {
   geometry: Geometry;
-  svgPath: string;
+  pathData?: VectorPathData;
+  /** Legacy compatibility source. Parsed to pathData when Vector Engine v1 supports it. */
+  svgPath?: string;
   fill?: string;
   stroke?: { color: string; widthDU: number; dash?: "solid" | "dash" | "dot" };
   name?: string;
@@ -29,17 +32,35 @@ function validateGeometry(geometry: Geometry): Geometry {
   return next;
 }
 
-function validatePath(svgPath: string): string {
+function safeLegacyPath(svgPath: string): string {
   const path = svgPath.trim();
-  if (!path) throw new Error("Vector svgPath is required");
+  if (!path) throw new Error("Vector pathData or svgPath is required");
   if (!/^[Mm]\s*[-+\d.]/.test(path)) throw new Error("Vector svgPath must begin with an SVG move command");
   if (/<|>|script|javascript:/i.test(path)) throw new Error("Vector svgPath contains invalid markup or script content");
   return path;
 }
 
+function resolvePath(input: InsertVectorInput): { pathData?: VectorPathData; svgPath: string } {
+  if (input.pathData) {
+    validateVectorPathData(input.pathData);
+    const pathData = structuredClone(input.pathData);
+    return { pathData, svgPath: vectorPathToSvg(pathData) };
+  }
+  const svgPath = safeLegacyPath(input.svgPath ?? "");
+  try {
+    const pathData = parseSvgPathData(svgPath);
+    return { pathData, svgPath: vectorPathToSvg(pathData) };
+  } catch (error) {
+    // Arc/unsupported SVG remains a deliberate legacy vector rather than being
+    // silently approximated into an editable structured path.
+    if (error instanceof Error && /arc commands|Unsupported SVG path command/.test(error.message)) return { svgPath };
+    throw error;
+  }
+}
+
 export function buildInsertVectorCommand(slide: SlideDocument, input: InsertVectorInput): InsertVectorResult {
   const geometry = validateGeometry(input.geometry);
-  const svgPath = validatePath(input.svgPath);
+  const resolved = resolvePath(input);
   if (input.stroke) {
     if (!/^#[0-9A-Fa-f]{6}$/.test(input.stroke.color)) throw new Error("Vector stroke color must be #RRGGBB");
     if (!Number.isFinite(input.stroke.widthDU) || input.stroke.widthDU < 0) throw new Error("Vector stroke width must be a non-negative number");
@@ -59,7 +80,8 @@ export function buildInsertVectorCommand(slide: SlideDocument, input: InsertVect
     shape: "custom",
     fill,
     stroke: input.stroke,
-    svgPath,
+    pathData: resolved.pathData,
+    svgPath: resolved.svgPath,
   };
   return {
     element,
