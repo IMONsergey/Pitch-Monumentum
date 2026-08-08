@@ -52,12 +52,23 @@ test("Daybrush editor spike commits a real drag into the canonical deck", async 
     await page.mouse.down();
     await page.mouse.move(startX + 55, startY + 35, { steps: 8 });
     await page.mouse.up();
-    await page.getByText("committed through DeckMutation", { exact: false }).waitFor({ timeout: 10_000 });
+
+    try {
+      await page.getByText("committed through DeckMutation", { exact: false }).waitFor({ timeout: 5_000 });
+    } catch {
+      const telemetry = await page.evaluate(() => (window as any).__pitchEditorDebug);
+      const status = await page.locator("#spikeStatus").textContent();
+      throw new Error(`Editor drag did not commit. status=${status}; telemetry=${JSON.stringify(telemetry)}`);
+    }
 
     const after = await fetch(`${base}/api/project`).then((response) => response.json()) as any;
     const afterElement = after.deck.slides[0].scene.find((element: any) => element.id === targetId);
     assert(afterElement);
-    assert(afterElement.geometry.x !== beforeGeometry.x || afterElement.geometry.y !== beforeGeometry.y);
+    const moved = afterElement.geometry.x !== beforeGeometry.x || afterElement.geometry.y !== beforeGeometry.y;
+    if (!moved) {
+      const telemetry = await page.evaluate(() => (window as any).__pitchEditorDebug);
+      throw new Error(`Editor committed without x/y movement. before=${JSON.stringify(beforeGeometry)} after=${JSON.stringify(afterElement.geometry)} telemetry=${JSON.stringify(telemetry)}`);
+    }
     assert.notEqual(after.deckHash, before.deckHash);
   } finally {
     await browser.close();
