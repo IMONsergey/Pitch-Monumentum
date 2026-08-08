@@ -2,6 +2,7 @@ import type { DeckDocument, SceneElement, SlideDocument } from "../../deck-model
 
 export type SlideDiffKind = "added" | "removed" | "moved" | "renamed" | "semantic" | "scene";
 export type ElementDiffKind = "added" | "removed" | "typeChanged" | "geometry" | "presentation" | "content" | "dependencies";
+export type ElementDiffFacet = "text-data" | "appearance" | "media" | "hierarchy" | "metadata";
 
 export interface ElementDiff {
   elementId: string;
@@ -9,6 +10,7 @@ export interface ElementDiff {
   before?: unknown;
   after?: unknown;
   fields?: string[];
+  facets?: ElementDiffFacet[];
 }
 
 export interface SlideDiff {
@@ -27,6 +29,11 @@ export interface DeckDiff {
   afterDeckId: string;
   changed: boolean;
   slideDiffs: SlideDiff[];
+  systemChanges: {
+    deckTitleChanged: boolean;
+    themeChanged: boolean;
+    slideMastersChanged: boolean;
+  };
   summary: {
     slidesAdded: number;
     slidesRemoved: number;
@@ -42,6 +49,10 @@ export interface DeckDiff {
 
 const PRESENTATION_FIELDS = ["name", "zIndex", "opacity", "locked", "exportStrategy"] as const;
 const SEMANTIC_FIELDS = ["purpose", "takeaway", "questionAnswered", "narrativeRole", "claimIds", "evidenceRefs", "audienceRelevance", "decisionContribution", "density"] as const;
+const APPEARANCE_FIELDS = new Set(["fill", "fillPaint", "stroke", "radiusDU", "cornerRadiusDU", "effects", "shape", "tint"]);
+const MEDIA_FIELDS = new Set(["assetId", "crop", "focalPoint", "clipShape", "fit", "alt", "posterAssetId"]);
+const HIERARCHY_FIELDS = new Set(["childIds", "layout", "groupId", "layoutItem", "clipContent"]);
+const TEXT_DATA_FIELDS = new Set(["paragraphs", "verticalAlign", "insetsDU", "fitPolicy", "chart", "themeTokenRefs", "rows", "columnWidths", "diagramType", "nodes", "edges"]);
 
 function stable(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(stable).join(",")}]`;
@@ -74,22 +85,37 @@ function changedFields(before: Record<string, unknown>, after: Record<string, un
   return [...new Set([...Object.keys(before), ...Object.keys(after)])].filter((key) => !same(before[key], after[key])).sort();
 }
 
+function facetsForFields(fields: string[]): ElementDiffFacet[] {
+  const facets = new Set<ElementDiffFacet>();
+  for (const field of fields) {
+    if (APPEARANCE_FIELDS.has(field)) facets.add("appearance");
+    if (MEDIA_FIELDS.has(field)) facets.add("media");
+    if (HIERARCHY_FIELDS.has(field)) facets.add("hierarchy");
+    if (TEXT_DATA_FIELDS.has(field)) facets.add("text-data");
+  }
+  if (!facets.size && fields.length) facets.add("metadata");
+  return [...facets];
+}
+
 function elementDiff(before: SceneElement | undefined, after: SceneElement | undefined): ElementDiff[] {
-  if (!before && after) return [{ elementId: after.id, kind: "added", after: structuredClone(after) }];
-  if (before && !after) return [{ elementId: before.id, kind: "removed", before: structuredClone(before) }];
+  if (!before && after) return [{ elementId: after.id, kind: "added", after: structuredClone(after), facets: ["metadata"] }];
+  if (before && !after) return [{ elementId: before.id, kind: "removed", before: structuredClone(before), facets: ["metadata"] }];
   if (!before || !after) return [];
-  if (before.type !== after.type) return [{ elementId: before.id, kind: "typeChanged", before: before.type, after: after.type }];
+  if (before.type !== after.type) return [{ elementId: before.id, kind: "typeChanged", before: before.type, after: after.type, facets: ["metadata"] }];
   const diffs: ElementDiff[] = [];
   if (!same(geometry(before), geometry(after))) diffs.push({ elementId: before.id, kind: "geometry", before: structuredClone(geometry(before)), after: structuredClone(geometry(after)), fields: changedFields(geometry(before) as any, geometry(after) as any) });
   const beforePresentation = presentation(before);
   const afterPresentation = presentation(after);
-  if (!same(beforePresentation, afterPresentation)) diffs.push({ elementId: before.id, kind: "presentation", before: beforePresentation, after: afterPresentation, fields: changedFields(beforePresentation, afterPresentation) });
+  if (!same(beforePresentation, afterPresentation)) diffs.push({ elementId: before.id, kind: "presentation", before: beforePresentation, after: afterPresentation, fields: changedFields(beforePresentation, afterPresentation), facets: ["metadata"] });
   const beforeContent = content(before);
   const afterContent = content(after);
-  if (!same(beforeContent, afterContent)) diffs.push({ elementId: before.id, kind: "content", before: structuredClone(beforeContent), after: structuredClone(afterContent), fields: changedFields(beforeContent as any, afterContent as any) });
+  if (!same(beforeContent, afterContent)) {
+    const fields = changedFields(beforeContent as any, afterContent as any);
+    diffs.push({ elementId: before.id, kind: "content", before: structuredClone(beforeContent), after: structuredClone(afterContent), fields, facets: facetsForFields(fields) });
+  }
   const beforeDependencies = dependencies(before);
   const afterDependencies = dependencies(after);
-  if (!same(beforeDependencies, afterDependencies)) diffs.push({ elementId: before.id, kind: "dependencies", before: beforeDependencies, after: afterDependencies });
+  if (!same(beforeDependencies, afterDependencies)) diffs.push({ elementId: before.id, kind: "dependencies", before: beforeDependencies, after: afterDependencies, facets: ["metadata"] });
   return diffs;
 }
 
@@ -105,11 +131,11 @@ function sceneDiff(before: SlideDocument, after: SlideDocument): ElementDiff[] {
 }
 
 function addedSlide(slide: SlideDocument): SlideDiff {
-  return { slideId: slide.id, kinds: ["added"], afterOrder: slide.order, afterTitle: slide.title, semanticFields: [], elementDiffs: slide.scene.map((element) => ({ elementId: element.id, kind: "added" as const, after: structuredClone(element) })) };
+  return { slideId: slide.id, kinds: ["added"], afterOrder: slide.order, afterTitle: slide.title, semanticFields: [], elementDiffs: slide.scene.map((element) => ({ elementId: element.id, kind: "added" as const, after: structuredClone(element), facets: ["metadata"] })) };
 }
 
 function removedSlide(slide: SlideDocument): SlideDiff {
-  return { slideId: slide.id, kinds: ["removed"], beforeOrder: slide.order, beforeTitle: slide.title, semanticFields: [], elementDiffs: slide.scene.map((element) => ({ elementId: element.id, kind: "removed" as const, before: structuredClone(element) })) };
+  return { slideId: slide.id, kinds: ["removed"], beforeOrder: slide.order, beforeTitle: slide.title, semanticFields: [], elementDiffs: slide.scene.map((element) => ({ elementId: element.id, kind: "removed" as const, before: structuredClone(element), facets: ["metadata"] })) };
 }
 
 export function diffDecks(before: DeckDocument, after: DeckDocument): DeckDiff {
@@ -147,5 +173,10 @@ export function diffDecks(before: DeckDocument, after: DeckDocument): DeckDiff {
     presentationChanges: count("presentation"),
     contentChanges: count("content"),
   };
-  return { beforeDeckId: before.id, afterDeckId: after.id, changed: slideDiffs.length > 0, slideDiffs, summary };
+  const systemChanges = {
+    deckTitleChanged: before.title !== after.title,
+    themeChanged: !same((before as any).theme, (after as any).theme),
+    slideMastersChanged: !same((before as any).slideMasters, (after as any).slideMasters),
+  };
+  return { beforeDeckId: before.id, afterDeckId: after.id, changed: slideDiffs.length > 0 || Object.values(systemChanges).some(Boolean), slideDiffs, systemChanges, summary };
 }
