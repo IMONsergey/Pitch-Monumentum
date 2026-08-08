@@ -38,6 +38,17 @@ function targetBox(document: ReturnType<typeof importSvgPaths>): { x: number; y:
   return { x: (1920 - width) / 2, y: (1080 - height) / 2, width, height };
 }
 
+async function restoreSlideAndSelection(slideId: string, ids: string[]): Promise<void> {
+  const editor = runtime();
+  if (!editor) return;
+  await editor.reload();
+  await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+  const slideButton = document.querySelector<HTMLElement>(`[data-slide="${CSS.escape(slideId)}"]`);
+  slideButton?.click();
+  await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+  editor.select(ids);
+}
+
 async function importFile(file: File): Promise<void> {
   const editor = runtime();
   const project = editor?.getProject();
@@ -75,8 +86,7 @@ async function importFile(file: File): Promise<void> {
   });
   if (!operations.length) throw new Error("SVG contains no editable vector paths");
   await mutate(operations, `Import SVG ${file.name} · ${operations.length} vector path(s)`, project.deckHash);
-  await editor.reload();
-  editor.select(ids);
+  await restoreSlideAndSelection(slide.id, ids);
   status(`SVG imported · ${ids.length} editable vector path(s) · one version${parsed.warnings.length ? ` · ${parsed.warnings.length} warning(s)` : ""}`);
   if (parsed.warnings.length) console.warn("Pitch SVG import warnings", parsed.warnings);
 }
