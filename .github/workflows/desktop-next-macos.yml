@@ -1,0 +1,43 @@
+name: Desktop Next macOS x64
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: pitch-desktop-next-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-x64-dmg:
+    runs-on: macos-15-intel
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install
+      - run: node scripts/package-desktop-next-safe.mjs
+      - name: Verify Intel executable
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP_BIN="$(find dist-desktop-next -type f -path '*.app/Contents/MacOS/Pitch Monumentum' -print -quit)"
+          test -n "$APP_BIN"
+          file "$APP_BIN" | tee desktop-next-architecture.txt
+          grep -q 'x86_64' desktop-next-architecture.txt
+      - name: Hash DMG
+        shell: bash
+        run: |
+          set -euo pipefail
+          DMG="$(find dist-desktop-next -maxdepth 2 -type f -name '*.dmg' -print -quit)"
+          test -n "$DMG"
+          shasum -a 256 "$DMG" | tee desktop-next-sha256.txt
+          echo "DMG_PATH=$DMG" >> "$GITHUB_ENV"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Pitch-Monumentum-Desktop-Next-mac-x64
+          path: |
+            ${{ env.DMG_PATH }}
+            desktop-next-architecture.txt
+            desktop-next-sha256.txt
+          if-no-files-found: error
