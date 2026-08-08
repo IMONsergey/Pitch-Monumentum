@@ -6,10 +6,18 @@ import { PitchWorkspaceService } from "../../workspace/src/server.js";
 export type WorkspaceReviewCommand = ReviewCommand & {
   expectedDeckHash?: string;
   expectedReviewHash?: string;
+  /** Required for human-governance commands that do not carry author in the core command union, such as revokeApproval. */
+  author?: { kind: "user" | "codex" | "system"; id?: string; displayName: string };
 };
 
 function headByKind(current: Awaited<ReturnType<PitchWorkspaceService["state"]>>, kind: string): BranchArtifactHead | undefined {
   return Object.values(current.manifest.branches[current.manifest.activeBranchId]?.heads ?? {}).find((head) => head.kind === kind);
+}
+
+function assertHumanReviewAuthority(input: WorkspaceReviewCommand): void {
+  if (!["resolve", "reopen", "approveSlide", "approveDeck", "revokeApproval"].includes(input.command)) return;
+  const value = input as any;
+  if (value.author?.kind !== "user") throw new Error(`${input.command} requires a human review author; Codex/system may reply or propose changes but cannot self-approve or close review authority.`);
 }
 
 export class ReviewWorkspaceRuntime {
@@ -37,6 +45,7 @@ export class ReviewWorkspaceRuntime {
   }
 
   async command(input: WorkspaceReviewCommand) {
+    assertHumanReviewAuthority(input);
     const current = await this.service.state();
     if (input.expectedDeckHash && input.expectedDeckHash !== current.deckHash) throw new Error(`Deck changed since review command was authored: expected ${input.expectedDeckHash}, got ${current.deckHash}`);
     const reviewHead = headByKind(current, "review");
