@@ -1,6 +1,7 @@
 import type { BranchArtifactHead, ProjectBranch } from "../../../packages/artifact-store/src/index.js";
 import type { DeckDocument } from "../../../packages/deck-model/src/index.js";
 import { diffDecks, type DeckDiff } from "../../../packages/deck-diff/src/index.js";
+import { deckHash as computeDeckHash } from "../../../packages/mutations/src/index.js";
 import { emptyMotionDocument } from "../../../packages/motion-commands/src/index.js";
 import type { MotionDocument } from "../../../packages/motion-engine/src/index.js";
 import { runDeterministicQA } from "../../../packages/qa/src/index.js";
@@ -59,11 +60,12 @@ function targetChangedSinceFork(base: Record<string, BranchArtifactHead>, target
   return artifactChanges(relevant(base), relevant(target)).length > 0;
 }
 
-async function readBranchDeck(service: PitchWorkspaceService, branch: ProjectBranch): Promise<{ head: BranchArtifactHead; deck: DeckDocument }> {
+async function readBranchDeck(service: PitchWorkspaceService, branch: ProjectBranch): Promise<{ head: BranchArtifactHead; deck: DeckDocument; hash: string }> {
   const head = headByKind(branch, "deck");
   if (!head) throw new Error(`Branch ${branch.id} has no deck head`);
-  const deck = (await service.store.read<DeckDocument>(head.id, head.version)).payload;
-  return { head, deck };
+  const stored = (await service.store.read<DeckDocument>(head.id, head.version)).payload;
+  const deck = stored.activeBranchId === branch.id ? stored : { ...stored, activeBranchId: branch.id };
+  return { head, deck, hash: computeDeckHash(deck) };
 }
 
 export async function reviewCreativePreview(service: PitchWorkspaceService, previewBranchId: string): Promise<CreativePreviewReview> {
@@ -100,8 +102,8 @@ export async function reviewCreativePreview(service: PitchWorkspaceService, prev
     targetBranchName: target.name,
     baseAvailable: Boolean(base),
     targetUnchangedSinceFork,
-    targetDeckHash: targetDeck.head.contentHash,
-    previewDeckHash: previewDeck.head.contentHash,
+    targetDeckHash: targetDeck.hash,
+    previewDeckHash: previewDeck.hash,
     changedArtifacts,
     changedArtifactKinds,
     deckDiff,
@@ -152,7 +154,7 @@ export async function acceptCreativePreview(
   if (!preview || !target) throw new Error("Preview/target branch disappeared during accept");
   const previewDeckHead = headByKind(preview, "deck")!;
   const targetDeckHead = headByKind(target, "deck")!;
-  const previewDeck = (await service.store.read<DeckDocument>(previewDeckHead.id, previewDeckHead.version)).payload;
+  const previewDeck = (await readBranchDeck(service, preview)).deck;
   const previewMotionHead = headByKind(preview, "motion");
   const targetMotionHead = headByKind(target, "motion");
   const baseMotionHead = preview.baseHeads ? Object.values(preview.baseHeads).find((head) => head.kind === "motion") : undefined;
@@ -162,17 +164,13 @@ export async function acceptCreativePreview(
   await service.checkout(review.targetBranchId);
   const current = await service.state();
   if (current.deckHash !== input.expectedTargetDeckHash) throw new Error(`Target branch changed while accepting preview: expected ${input.expectedTargetDeckHash}, got ${current.deckHash}`);
-  const acceptedDeckHead = deckDiffHasContent(review.deckDiff) ? await writeDeckAccept(service, review.targetBranchId, targetDeckHead, previewDeckHead, previewDeck) : targetDeckHead;
+  const acceptedDeckHead = review.deckDiff.changed ? await writeDeckAccept(service, review.targetBranchId, targetDeckHead, previewDeckHead, previewDeck) : targetDeckHead;
   if (previewMotion && previewMotionHead) await writeMotionAccept(service, review.targetBranchId, { ...previewDeck, activeBranchId: review.targetBranchId }, targetMotionHead, previewMotionHead, previewMotion);
 
   const acceptedDeck = (await service.store.read<DeckDocument>(acceptedDeckHead.id, acceptedDeckHead.version)).payload;
   const qa = runDeterministicQA(acceptedDeck);
   await service.store.write({ id: "qa_current", kind: "qa", payload: { deckId: acceptedDeck.id, issues: qa, reason: `Accept Creative preview ${preview.name}`, impact: { affectedSlideIds: review.deckDiff.slideDiffs.map((slide) => slide.slideId), affectedElementIds: review.deckDiff.slideDiffs.flatMap((slide) => slide.elementDiffs.map((element) => element.elementId)), staleArtifacts: ["qa:visual", "qa:readability", "export"], narrativeChanged: review.deckDiff.summary.semanticChanges > 0, evidenceRisk: review.deckDiff.slideDiffs.some((slide) => slide.semanticFields.includes("claimIds") || slide.semanticFields.includes("evidenceRefs")), slideOrderChanged: review.deckDiff.summary.slidesMoved > 0 || review.deckDiff.summary.slidesAdded > 0 || review.deckDiff.summary.slidesRemoved > 0 } }, producer: { type: "deterministic" }, inputs: [acceptedDeckHead], status: qa.some((issue) => issue.severity === "critical") ? "needsReview" : "ready" });
   return { review, acceptedIntoBranchId: review.targetBranchId, previewBranchId: review.previewBranchId, state: await service.state() };
-}
-
-function deckDiffHasContent(diff: DeckDiff): boolean {
-  return diff.changed;
 }
 
 export async function discardCreativePreview(service: PitchWorkspaceService, previewBranchId: string) {
