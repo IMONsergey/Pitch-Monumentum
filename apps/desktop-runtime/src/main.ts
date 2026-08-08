@@ -3,7 +3,7 @@ import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join, resolve, sep } from "node:path";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
-import { createFullWorkspaceServer } from "../../workspace/src/full-server.js";
+import { createPitchFullWorkspaceServer } from "../../workspace/src/full-server.js";
 import { ensureDesktopPreviewProject } from "../../../packages/project-bootstrap/src/index.js";
 import type { DeliveryRuntime } from "../../delivery/src/runtime.js";
 import { exportDesktopPdf, exportDesktopPngSlides } from "./static-render.js";
@@ -24,7 +24,8 @@ function preloadPath(): string { return join(app.getAppPath(), "dist", "apps", "
 function exportDir(): string { return join(currentProjectRoot, ".project", "exports"); }
 
 async function readDesktopState(): Promise<DesktopState> {
-  try { return JSON.parse(await readFile(statePath(), "utf8")) as DesktopState; }
+  try { return JSON.parse(await readFile(statePath(), "utf8")) as DesktopState;
+  }
   catch { return { schemaVersion: "0.3" }; }
 }
 async function writeDesktopState(state: DesktopState): Promise<void> {
@@ -46,7 +47,7 @@ async function closeWorkspaceServer(): Promise<void> {
 }
 async function startWorkspace(projectRoot: string): Promise<void> {
   await closeWorkspaceServer();
-  const created = createFullWorkspaceServer(projectRoot);
+  const created = createPitchFullWorkspaceServer(projectRoot);
   workspaceServer = created.server;
   delivery = created.delivery;
   await new Promise<void>((resolveListen, reject) => { created.server.once("error", reject); created.server.listen(0, "127.0.0.1", () => resolveListen()); });
