@@ -1,6 +1,5 @@
 import { effectiveFillPaint } from "../../../packages/appearance/src/index.js";
-import { effectiveVectorSvgPath } from "../../../packages/vector-engine/src/index.js";
-import { vectorPathBounds } from "../../../packages/vector-path/src/index.js";
+import { vectorPathBounds, vectorPathToSvg } from "../../../packages/vector-path/src/index.js";
 
 type AnyRecord = Record<string, any>;
 
@@ -52,7 +51,7 @@ function hydrateVectors(): void {
   scene.querySelectorAll<HTMLElement>(".spike-el[data-id]").forEach((host) => {
     const element = host.dataset.id ? index.get(host.dataset.id) : undefined;
     if (!element || element.type !== "shape" || element.shape !== "custom") return;
-    const d = effectiveVectorSvgPath(element as any);
+    const d = element.pathData ? vectorPathToSvg(element.pathData) : element.svgPath?.trim();
     if (!d) return;
     const signature = JSON.stringify([element.pathData, element.svgPath, element.fill, element.fillPaint, element.stroke, element.effects]);
     if (host.dataset.pitchVectorSignature === signature) return;
