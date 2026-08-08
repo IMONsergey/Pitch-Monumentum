@@ -10,6 +10,8 @@ export interface ProjectBranch {
   parentBranchId?: string;
   createdAt: string;
   heads: Record<string, BranchArtifactHead>;
+  /** Snapshot of parent heads at fork time. Used for three-way review/conflict detection; absent on legacy branches. */
+  baseHeads?: Record<string, BranchArtifactHead>;
 }
 export interface ProjectManifest {
   schemaVersion: "0.1";
@@ -119,7 +121,14 @@ export class ArtifactStore {
     const parent = manifest.branches[parentId];
     if (!parent) throw new Error(`Unknown parent branch: ${parentId}`);
     const id = `branch_${randomUUID()}`;
-    manifest.branches[id] = { id, name, parentBranchId: parentId, createdAt: new Date().toISOString(), heads: structuredClone(parent.heads) };
+    manifest.branches[id] = {
+      id,
+      name,
+      parentBranchId: parentId,
+      createdAt: new Date().toISOString(),
+      heads: structuredClone(parent.heads),
+      baseHeads: structuredClone(parent.heads),
+    };
     manifest.activeBranchId = id;
     manifest.updatedAt = new Date().toISOString();
     await atomicJsonWrite(this.manifestPath(), manifest);
