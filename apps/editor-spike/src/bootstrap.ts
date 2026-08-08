@@ -8,6 +8,7 @@ import { installPitchAppearanceUI } from "./appearance-ui.js";
 import { installPitchVectorUI } from "./vector-ui.js";
 import { installPitchVectorRenderer } from "./vector-render-ui.js";
 import { installPitchVectorNodeUI } from "./vector-node-ui.js";
+import { installPitchSvgImportUI } from "./svg-import-ui.js";
 import { installPitchSlideUI } from "./slide-ui.js";
 import "./client.js";
 
@@ -21,4 +22,5 @@ installPitchAppearanceUI();
 installPitchVectorUI();
 installPitchVectorRenderer();
 installPitchVectorNodeUI();
+installPitchSvgImportUI();
 installPitchSlideUI();
