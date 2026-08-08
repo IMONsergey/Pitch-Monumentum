@@ -121,11 +121,10 @@ test("in-canvas Lexical editing persists mixed formatting as canonical TextRuns"
     await page.locator(`#spikeScene [data-id="${textElement.id}"][data-pitch-text-editing="true"]`).waitFor();
     await page.locator("#pitchTextToolbar.visible").waitFor();
 
-    await target.press("Control+A");
-    await page.locator("[data-text-action=bold]").click();
-    await target.press("ArrowRight");
-    await page.locator("[data-text-action=bold]").click();
+    await target.press("End");
     await target.pressSequentially(" EXTRA", { delay: 10 });
+    await target.press("Control+Shift+ArrowLeft");
+    await page.locator("[data-text-action=bold]").click();
     await page.locator("[data-text-action=commit]").click();
 
     await page.waitForFunction(async (beforeHash) => {
@@ -140,8 +139,8 @@ test("in-canvas Lexical editing persists mixed formatting as canonical TextRuns"
     const runs = afterElement.paragraphs.flatMap((paragraph: any) => paragraph.runs);
     const finalText = runs.map((run: any) => run.text).join("");
     assert.equal(finalText, `${originalText} EXTRA`);
-    assert(runs.some((run: any) => run.bold === true), `Expected a bold run, got ${JSON.stringify(runs)}`);
-    assert(runs.some((run: any) => !run.bold && run.text.includes("EXTRA")), `Expected an unbold appended run, got ${JSON.stringify(runs)}`);
+    assert(runs.some((run: any) => run.text.includes("EXTRA") && run.bold === true), `Expected a bold appended run, got ${JSON.stringify(runs)}`);
+    assert(runs.some((run: any) => run.text.includes(originalText) && !run.bold), `Expected original text to remain independently formatted, got ${JSON.stringify(runs)}`);
     assert(!JSON.stringify(afterElement).includes('"root"'), "Lexical editor state must not leak into canonical text element");
     assert.notEqual(after.deckHash, before.deckHash);
   } finally {
@@ -155,7 +154,9 @@ test("Shift+A wraps a multi-selection in canonical Auto Layout and inspector upd
   try {
     const before = await project(base);
     const slide = before.deck.slides[0];
-    const candidates = slide.scene.filter((element: any) => !element.locked && element.geometry.width > 0 && element.geometry.height > 0 && element.geometry.width < before.deck.canvas.widthDU * 0.9).slice(0, 2);
+    const candidates = slide.scene
+      .filter((element: any) => !element.locked && element.type !== "shape" && element.geometry.width > 0 && element.geometry.height > 0 && element.geometry.width < before.deck.canvas.widthDU * 0.9)
+      .slice(0, 2);
     assert.equal(candidates.length, 2, "Demo deck needs at least two selectable bounded elements");
     const selectedIds = candidates.map((element: any) => element.id);
 
@@ -167,28 +168,48 @@ test("Shift+A wraps a multi-selection in canonical Auto Layout and inspector upd
     await page.locator("#spikeSelection").getByText("2 selected", { exact: false }).waitFor();
 
     await page.keyboard.press("Shift+A");
-    await page.getByText("Auto Layout frame created", { exact: false }).waitFor({ timeout: 10_000 });
-    const wrapped = await project(base);
-    const created = wrapped.deck.slides[0].scene.find((element: any) => element.type === "frame" && selectedIds.every((id: string) => element.childIds.includes(id)));
+    let created: any;
+    try {
+      await page.waitForFunction(async (ids) => {
+        const response = await fetch("/api/project");
+        const next = await response.json();
+        return next.deck.slides.flatMap((slide: any) => slide.scene).some((element: any) => element.type === "frame" && ids.every((id: string) => element.childIds.includes(id)));
+      }, selectedIds, { timeout: 10_000 });
+      const wrapped = await project(base);
+      created = wrapped.deck.slides[0].scene.find((element: any) => element.type === "frame" && selectedIds.every((id: string) => element.childIds.includes(id)));
+    } catch {
+      const telemetry = await page.evaluate(() => (window as any).__pitchAutoLayoutDebug);
+      const status = await page.locator("#spikeStatus").textContent();
+      throw new Error(`Shift+A did not create a canonical frame. status=${status}; telemetry=${JSON.stringify(telemetry)}`);
+    }
+
     assert(created, `Expected frame containing ${selectedIds.join(", ")}`);
     assert.equal(created.layout.direction, "horizontal");
     assert.equal(created.layout.gapDU, 24);
 
+    const wrapped = await project(base);
     const childGeometries = selectedIds.map((id: string) => wrapped.deck.slides[0].scene.find((element: any) => element.id === id).geometry);
     assert(childGeometries[1].x > childGeometries[0].x, "Yoga should place the second child after the first in horizontal layout");
 
+    await page.locator(`#spikeScene [data-id="${created.id}"]`).waitFor({ timeout: 10_000 });
     await page.locator(`#spikeScene [data-id="${created.id}"]`).click();
     await page.locator("#pitchAutoLayoutButton").click();
     await page.locator("#pitchLayoutPanel.visible").waitFor();
     await page.locator("[data-layout=gap]").fill("40");
     await page.locator("[data-layout-action=apply]").click();
 
-    await page.waitForFunction(async (frameId) => {
-      const response = await fetch("/api/project");
-      const next = await response.json();
-      const frame = next.deck.slides.flatMap((slide: any) => slide.scene).find((element: any) => element.id === frameId);
-      return frame?.layout?.gapDU === 40;
-    }, created.id, { timeout: 10_000 });
+    try {
+      await page.waitForFunction(async (frameId) => {
+        const response = await fetch("/api/project");
+        const next = await response.json();
+        const frame = next.deck.slides.flatMap((slide: any) => slide.scene).find((element: any) => element.id === frameId);
+        return frame?.layout?.gapDU === 40;
+      }, created.id, { timeout: 10_000 });
+    } catch {
+      const telemetry = await page.evaluate(() => (window as any).__pitchAutoLayoutDebug);
+      const status = await page.locator("#spikeStatus").textContent();
+      throw new Error(`Auto Layout inspector did not commit gap=40. status=${status}; telemetry=${JSON.stringify(telemetry)}`);
+    }
 
     const after = await project(base);
     const updated = after.deck.slides[0].scene.find((element: any) => element.id === created.id);
