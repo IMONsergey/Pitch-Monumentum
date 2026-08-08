@@ -35,17 +35,18 @@ const selectionFields = {
 };
 const expectedDeckHash = { type: "string" };
 const geometry = { type: "object", properties: { x: { type: "number" }, y: { type: "number" }, width: { type: "number", exclusiveMinimum: 0 }, height: { type: "number", exclusiveMinimum: 0 }, rotation: { type: "number" } }, required: ["x", "y", "width", "height"], additionalProperties: false };
+const crop = { type: "object", properties: { left: { type: "number", minimum: 0, maximum: .999999 }, top: { type: "number", minimum: 0, maximum: .999999 }, right: { type: "number", minimum: 0, maximum: .999999 }, bottom: { type: "number", minimum: 0, maximum: .999999 } }, required: ["left", "top", "right", "bottom"], additionalProperties: false };
 
 export const PITCH_TOOL_DEFINITIONS: PitchToolDefinition[] = [
   {
     name: "pitch_project_state",
-    description: "Read current Pitch project state: active branch, deck hash, slide/object handles, QA, deck history, motion timeline/history and reusable component summaries.",
+    description: "Read current Pitch project state: active branch, deck hash, slide/object handles, QA, deck history, motion timeline/history, reusable components and project image assets.",
     readOnly: true,
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
   },
   {
     name: "pitch_editor_command",
-    description: "Execute professional object or slide editing through the same canonical engine used by the Pitch UI. Commands are atomic and versioned.",
+    description: "Execute professional object or slide editing through the same canonical engine used by the Pitch UI. Commands are atomic and versioned. Existing project assets can be inserted with insertImage.",
     readOnly: false,
     inputSchema: {
       oneOf: [
@@ -63,6 +64,7 @@ export const PITCH_TOOL_DEFINITIONS: PitchToolDefinition[] = [
         { type: "object", properties: { command: { const: "insertText" }, slideId: { type: "string" }, geometry: { $ref: "#/$defs/geometry" }, text: { type: "string" }, expectedDeckHash }, required: ["command", "slideId", "geometry"], additionalProperties: false },
         { type: "object", properties: { command: { const: "insertShape" }, slideId: { type: "string" }, geometry: { $ref: "#/$defs/geometry" }, shape: { enum: ["rect", "roundRect", "ellipse", "triangle"] }, fill: { type: "string" }, expectedDeckHash }, required: ["command", "slideId", "geometry"], additionalProperties: false },
         { type: "object", properties: { command: { const: "insertFrame" }, slideId: { type: "string" }, geometry: { $ref: "#/$defs/geometry" }, fill: { type: "string" }, expectedDeckHash }, required: ["command", "slideId", "geometry"], additionalProperties: false },
+        { type: "object", properties: { command: { const: "insertImage" }, slideId: { type: "string" }, geometry: { $ref: "#/$defs/geometry" }, assetId: { type: "string", minLength: 1 }, alt: { type: "string" }, fit: { enum: ["cover", "contain", "stretch"] }, name: { type: "string" }, expectedDeckHash }, required: ["command", "slideId", "geometry", "assetId"], additionalProperties: false },
         { type: "object", properties: { command: { const: "newSlide" }, afterSlideId: { type: "string" }, title: { type: "string" }, expectedDeckHash }, required: ["command"], additionalProperties: false },
         { type: "object", properties: { command: { const: "duplicateSlide" }, slideId: { type: "string" }, expectedDeckHash }, required: ["command", "slideId"], additionalProperties: false },
         { type: "object", properties: { command: { const: "deleteSlide" }, slideId: { type: "string" }, expectedDeckHash }, required: ["command", "slideId"], additionalProperties: false },
@@ -100,7 +102,12 @@ export const PITCH_TOOL_DEFINITIONS: PitchToolDefinition[] = [
     readOnly: false,
     inputSchema: {
       type: "object",
-      properties: { command: { enum: ["setImageFit", "setImageCrop", "replaceImageAsset", "setImageCornerRadius"] }, slideId: { type: "string" }, elementId: { type: "string" }, fit: { enum: ["cover", "contain", "stretch"] }, crop: { anyOf: [{ type: "object", properties: { left: { type: "number" }, top: { type: "number" }, right: { type: "number" }, bottom: { type: "number" } }, required: ["left", "top", "right", "bottom"], additionalProperties: false }, { type: "null" }] }, assetId: { type: "string" }, alt: { anyOf: [{ type: "string" }, { type: "null" }] }, cornerRadiusDU: { anyOf: [{ type: "number", minimum: 0 }, { type: "null" }] }, expectedDeckHash },
+      properties: {
+        command: { enum: ["setImageProperties", "setImageFit", "setImageCrop", "replaceImageAsset", "setImageCornerRadius"] },
+        slideId: { type: "string" }, elementId: { type: "string" }, fit: { enum: ["cover", "contain", "stretch"] }, crop: { anyOf: [crop, { type: "null" }] }, assetId: { type: "string" }, alt: { anyOf: [{ type: "string" }, { type: "null" }] }, cornerRadiusDU: { anyOf: [{ type: "number", minimum: 0 }, { type: "null" }] },
+        changes: { type: "object", properties: { fit: { enum: ["cover", "contain", "stretch"] }, crop: { anyOf: [crop, { type: "null" }] }, assetId: { type: "string" }, alt: { anyOf: [{ type: "string" }, { type: "null" }] }, cornerRadiusDU: { anyOf: [{ type: "number", minimum: 0 }, { type: "null" }] } }, additionalProperties: false },
+        expectedDeckHash,
+      },
       required: ["command", "slideId", "elementId"], additionalProperties: false,
     },
   },
@@ -139,7 +146,7 @@ export class PitchToolRuntime {
               id: state.deck?.id,
               title: state.deck?.title,
               canvas: state.deck?.canvas,
-              slides: (state.deck?.slides ?? []).map((slide: any) => ({ id: slide.id, order: slide.order, title: slide.title, archetype: slide.archetype, status: slide.status, purpose: slide.semantic?.purpose, takeaway: slide.semantic?.takeaway, elements: (slide.scene ?? []).map((element: any) => ({ id: element.id, name: element.name, type: element.type, semanticRole: element.semanticRole, geometry: element.geometry, locked: Boolean(element.locked), componentInstanceId: element.tags?.find((tag: string) => tag.startsWith("component:"))?.slice("component:".length) })) }))
+              slides: (state.deck?.slides ?? []).map((slide: any) => ({ id: slide.id, order: slide.order, title: slide.title, archetype: slide.archetype, status: slide.status, purpose: slide.semantic?.purpose, takeaway: slide.semantic?.takeaway, elements: (slide.scene ?? []).map((element: any) => ({ id: element.id, name: element.name, type: element.type, semanticRole: element.semanticRole, geometry: element.geometry, locked: Boolean(element.locked), assetId: element.assetId, componentInstanceId: element.tags?.find((tag: string) => tag.startsWith("component:"))?.slice("component:".length) })) }))
             },
             qa: state.qa,
             history: state.history,
@@ -147,6 +154,7 @@ export class PitchToolRuntime {
             motionHash: state.motionHash,
             motionHistory: state.motionHistory,
             components: state.components,
+            assets: state.assets,
           }
         };
       }
