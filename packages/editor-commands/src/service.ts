@@ -1,7 +1,8 @@
 import type { DeckDocument, Geometry, SceneElement, SlideDocument, TextRun, VectorPathData } from "../../deck-model/src/index.js";
 import { autoLayoutMutationOperations } from "../../auto-layout/src/index.js";
 import { applyDeckMutation, createMutation, type DeckMutationOperation, type ElementAppearancePatch, type ElementStylePatch } from "../../mutations/src/index.js";
-import { translateVectorPath, validateVectorPathData, vectorPathBounds, vectorPathToSvg } from "../../vector-path/src/index.js";
+import { fitEditedVectorPath } from "../../vector-path/src/fit.js";
+import { validateVectorPathData, vectorPathToSvg } from "../../vector-path/src/index.js";
 import {
   alignSelection,
   arrangeSelection,
@@ -144,23 +145,12 @@ function vectorPathEditResult(slide: SlideDocument, element: Extract<SceneElemen
     nextSelectionIds: [element.id],
     affectedAutoLayoutContainerIds: [],
   };
-  if ((element.geometry.rotation ?? 0) !== 0) throw new Error("Vector node fit-bounds editing for rotated vectors is not implemented yet");
   if (!element.pathData) throw new Error(`Vector ${element.id} has no structured pathData to fit`);
-  const before = vectorPathBounds(element.pathData);
-  const after = vectorPathBounds(pathData);
-  const sx = element.geometry.width / Math.max(before.width, 0.000001);
-  const sy = element.geometry.height / Math.max(before.height, 0.000001);
-  const normalized = translateVectorPath(pathData, -after.left, -after.top);
-  const geometry: Partial<Geometry> = {
-    x: element.geometry.x + (after.left - before.left) * sx,
-    y: element.geometry.y + (after.top - before.top) * sy,
-    width: Math.max(0.01, after.width * sx),
-    height: Math.max(0.01, after.height * sy),
-  };
+  const fitted = fitEditedVectorPath(element.pathData, pathData, element.geometry);
   return {
     operations: [
-      { op: "updateVectorPath", slideId: slide.id, elementId: element.id, pathData: normalized },
-      { op: "updateGeometry", slideId: slide.id, elementId: element.id, geometry },
+      { op: "updateVectorPath", slideId: slide.id, elementId: element.id, pathData: fitted.pathData },
+      { op: "updateGeometry", slideId: slide.id, elementId: element.id, geometry: fitted.geometry },
     ],
     nextSelectionIds: [element.id],
     affectedAutoLayoutContainerIds: layoutParentIds(slide, element.id),
@@ -286,11 +276,9 @@ export function executeEditorCommand(deck: DeckDocument, input: EditorCommandInp
     const clipboard = copySelection(slide, input.selectedIds);
     return { reason: reasonFor(input), operations: [], nextSelectionIds: clipboard.rootIds, reflowedContainerIds: [], clipboard };
   }
-
   const command = dispatch(slide, input);
   const operations = command.operations.map((operation) => operation.op === "addElement" ? { ...operation, slideId: input.slideId } : operation);
   if (!operations.length) return { reason: reasonFor(input), operations: [], nextSelectionIds: command.nextSelectionIds, reflowedContainerIds: [] };
-
   const preview = applyDeckMutation(deck, createMutation(`Preview ${reasonFor(input)}`, operations, "deterministic")).deck;
   const previewSlide = slideById(preview, input.slideId);
   const reflowedContainerIds: string[] = [];
