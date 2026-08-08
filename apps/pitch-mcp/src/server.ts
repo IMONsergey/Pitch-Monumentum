@@ -84,11 +84,29 @@ const motionCommandShape = {
 };
 
 const cropSchema = z.object({ left: z.number().min(0).max(0.999999), top: z.number().min(0).max(0.999999), right: z.number().min(0).max(0.999999), bottom: z.number().min(0).max(0.999999) });
-const imageMediaPatchSchema = z.object({ fit: z.enum(["cover", "contain", "stretch"]).optional(), crop: cropSchema.nullable().optional(), assetId: z.string().optional(), alt: z.string().nullable().optional(), cornerRadiusDU: z.number().nonnegative().nullable().optional() });
+const focalPointSchema = z.object({ x: z.number().min(0).max(1), y: z.number().min(0).max(1) });
+const clipShapeSchema = z.enum(["rect", "roundRect", "ellipse"]);
+const imageMediaPatchSchema = z.object({
+  fit: z.enum(["cover", "contain", "stretch"]).optional(),
+  crop: cropSchema.nullable().optional(),
+  focalPoint: focalPointSchema.nullable().optional(),
+  clipShape: clipShapeSchema.nullable().optional(),
+  assetId: z.string().optional(),
+  alt: z.string().nullable().optional(),
+  cornerRadiusDU: z.number().nonnegative().nullable().optional(),
+});
 const mediaCommandShape = {
-  command: z.enum(["setImageProperties", "setImageFit", "setImageCrop", "replaceImageAsset", "setImageCornerRadius"]),
+  command: z.enum(["setImageProperties", "setImageFit", "setImageCrop", "setImageFocalPoint", "setImageClipShape", "replaceImageAsset", "setImageCornerRadius"]),
   slideId: z.string().min(1), elementId: z.string().min(1),
-  fit: z.enum(["cover", "contain", "stretch"]).optional(), crop: cropSchema.nullable().optional(), assetId: z.string().optional(), alt: z.string().nullable().optional(), cornerRadiusDU: z.number().nonnegative().nullable().optional(), changes: imageMediaPatchSchema.optional(), expectedDeckHash: z.string().optional(),
+  fit: z.enum(["cover", "contain", "stretch"]).optional(),
+  crop: cropSchema.nullable().optional(),
+  focalPoint: focalPointSchema.nullable().optional(),
+  clipShape: clipShapeSchema.nullable().optional(),
+  assetId: z.string().optional(),
+  alt: z.string().nullable().optional(),
+  cornerRadiusDU: z.number().nonnegative().nullable().optional(),
+  changes: imageMediaPatchSchema.optional(),
+  expectedDeckHash: z.string().optional(),
 };
 
 const componentCommandShape = {
@@ -108,12 +126,12 @@ export function createPitchMcpServer(projectRoot: string): McpServer {
   const workspace = new PitchWorkspaceService(resolve(projectRoot));
   const runtime = new PitchToolRuntime(workspace);
   const server = new McpServer(
-    { name: "pitch-monumentum", version: "0.4.0" },
+    { name: "pitch-monumentum", version: "0.5.0" },
     {
       instructions: [
         "Use pitch_project_state before meaningful edits to obtain current slide/object IDs, deckHash, motionHash, component master/instance handles and project asset handles.",
         "Use pitch_editor_command for canonical scene and storyboard edits instead of raw deck mutations. Use insertImage with an assetId already present in project state.",
-        "Use pitch_media_command for image fit, crop and asset replacement.",
+        "Use pitch_media_command for image fit, explicit normalized source crop, focal point, rect/roundRect/ellipse clip geometry, corner radius and asset replacement. Prefer setImageProperties for one coherent multi-property image edit.",
         "Use pitch_component_command for reusable component workflows: create/insert, updateFromSelection to update a master and propagate it, refreshInstances to resync linked instances, resetInstance to clear local slot overrides, or detach to break the link.",
         "Use pitch_motion_command for transitions, build order and keyframe tracks. Motion history is independent: use pitch_motion_undo/pitch_motion_redo for animation mistakes.",
         "Preserve requested scope. Prefer one coherent bounded command at a time and re-read state after operations that change IDs, hierarchy, slide order, component masters/instances, assets or motion history.",
@@ -139,7 +157,7 @@ export function createPitchMcpServer(projectRoot: string): McpServer {
   );
   server.registerTool(
     "pitch_media_command",
-    { title: "Edit Pitch image media", description: "Edit image fit, crop, corner radius or asset identity while preserving a fully editable image object.", inputSchema: mediaCommandShape },
+    { title: "Edit Pitch image media", description: "Edit image fit, crop, focal point, clip shape, corner radius or asset identity while preserving a fully editable image object.", inputSchema: mediaCommandShape },
     async (args) => mcpResult(await runtime.callTool("pitch_media_command", args)),
   );
   server.registerTool(
