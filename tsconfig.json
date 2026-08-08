@@ -6,7 +6,7 @@
     "strict": true,
     "skipLibCheck": true,
     "noEmit": true,
-    "types": [],
+    "types": ["node"],
     "lib": ["ES2022", "DOM"],
     "resolveJsonModule": true,
     "forceConsistentCasingInFileNames": true
