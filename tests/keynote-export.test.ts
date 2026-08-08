@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { convertPptxToKeynote, keynoteAvailability, KEYNOTE_SAVE_SCRIPT, type KeynoteCommandRunner } from "../packages/keynote-export/src/index.js";
@@ -23,7 +23,7 @@ test("Keynote availability resolves application bundle id through osascript on m
   assert(calls[0].args.join(" ").includes("id of application"));
 });
 
-test("conversion passes absolute PPTX/KEY paths to Keynote AppleScript and requires a real output", async () => {
+test("conversion passes absolute PPTX/KEY paths to Keynote AppleScript and inspects file output", async () => {
   const root = await mkdtemp(join(tmpdir(), "pitch-keynote-adapter-"));
   try {
     const input = join(root, "source.pptx");
@@ -38,7 +38,10 @@ test("conversion passes absolute PPTX/KEY paths to Keynote AppleScript and requi
     };
     const result = await convertPptxToKeynote(input, output, { platform: "darwin", runner });
     assert.equal(result.adapterStatus, "adapter-unverified");
-    assert(result.bytes > 0);
+    assert.equal(result.outputKind, "file");
+    assert.equal(result.outputFileCount, 1);
+    assert.equal(result.bytes, Buffer.byteLength("fake key bytes"));
+    assert.match(result.outputSha256, /^[0-9a-f]{64}$/);
     const saveCall = calls.find((call) => call.args.includes("--"));
     assert(saveCall);
     assert.equal(saveCall.file, "/usr/bin/osascript");
@@ -46,6 +49,27 @@ test("conversion passes absolute PPTX/KEY paths to Keynote AppleScript and requi
     assert(saveCall.args.includes(output));
     assert.match(KEYNOTE_SAVE_SCRIPT, /open sourceFile/);
     assert.match(KEYNOTE_SAVE_SCRIPT, /save openedDocument in destinationFile/);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("conversion accepts Keynote directory packages and reports their real contents", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pitch-keynote-package-"));
+  try {
+    const input = join(root, "source.pptx");
+    const output = join(root, "result.key");
+    await writeFile(input, "fake pptx bytes");
+    const runner: KeynoteCommandRunner = async (_file, args) => {
+      if (args.join(" ").includes("id of application")) return { stdout: "com.apple.iWork.Keynote\n", stderr: "" };
+      await mkdir(join(output, "Data"), { recursive: true });
+      await writeFile(join(output, "index.apxl"), "abc");
+      await writeFile(join(output, "Data", "asset.bin"), Buffer.from([1, 2, 3, 4]));
+      return { stdout: `${output}\n`, stderr: "" };
+    };
+    const result = await convertPptxToKeynote(input, output, { platform: "darwin", runner });
+    assert.equal(result.outputKind, "directory");
+    assert.equal(result.outputFileCount, 2);
+    assert.equal(result.bytes, 7);
+    assert.match(result.outputSha256, /^[0-9a-f]{64}$/);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
