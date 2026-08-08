@@ -37,18 +37,33 @@ function fixture(): DeckDocument {
         audienceRelevance: "Board",
         density: "sparse",
       },
-      scene: [{
-        id: "title",
-        type: "text",
-        name: "Title",
-        semanticRole: "title",
-        geometry: { x: 120, y: 140, width: 1200, height: 180 },
-        zIndex: 1,
-        origin: "agent",
-        exportStrategy: "native",
-        dependencies: [],
-        paragraphs: [{ runs: [{ text: "Approve phase two", fontSizePt: 44, bold: true, color: "#111111" }] }],
-      }],
+      scene: [
+        {
+          id: "title",
+          type: "text",
+          name: "Title",
+          semanticRole: "title",
+          geometry: { x: 120, y: 140, width: 1200, height: 180 },
+          zIndex: 1,
+          origin: "agent",
+          exportStrategy: "native",
+          dependencies: [],
+          paragraphs: [{ runs: [{ text: "Approve phase two", fontSizePt: 44, bold: true, color: "#111111" }] }],
+        },
+        {
+          id: "hero_image",
+          type: "image",
+          name: "Hero image",
+          semanticRole: "visual",
+          geometry: { x: 120, y: 400, width: 900, height: 500 },
+          zIndex: 2,
+          origin: "user",
+          exportStrategy: "native",
+          dependencies: [],
+          assetId: "asset_original",
+          fit: "cover",
+        },
+      ],
       status: "draft",
       qaIssueIds: [],
       dependencyIds: [],
@@ -65,12 +80,22 @@ async function setup() {
   return { service, runtime: new PitchToolRuntime(service) };
 }
 
-test("Pitch tool catalog exposes bounded editor and history tools", async () => {
+test("Pitch tool catalog exposes editor, motion, media, components and independent histories", async () => {
   const { runtime } = await setup();
   const tools = runtime.listTools();
-  assert.deepEqual(tools.map(tool => tool.name), ["pitch_project_state", "pitch_editor_command", "pitch_undo", "pitch_redo"]);
+  assert.deepEqual(tools.map(tool => tool.name), [
+    "pitch_project_state",
+    "pitch_editor_command",
+    "pitch_motion_command",
+    "pitch_media_command",
+    "pitch_component_command",
+    "pitch_undo",
+    "pitch_redo",
+    "pitch_motion_undo",
+    "pitch_motion_redo",
+  ]);
   assert.equal(tools.find(tool => tool.name === "pitch_project_state")?.readOnly, true);
-  assert.equal(tools.find(tool => tool.name === "pitch_editor_command")?.readOnly, false);
+  assert.equal(tools.find(tool => tool.name === "pitch_motion_command")?.readOnly, false);
 });
 
 test("Codex editor tool writes the same canonical deck version and can undo it", async () => {
@@ -99,7 +124,82 @@ test("Codex editor tool writes the same canonical deck version and can undo it",
   assert.equal(restored.deck.slides[0].scene.find((element: any) => element.id === "title")?.geometry.x, 120);
 });
 
-test("project-state tool returns semantic object handles rather than raw rich deck payloads", async () => {
+test("Codex can author motion and undo it independently from deck history", async () => {
+  const { service, runtime } = await setup();
+  const before = await service.state();
+  const result = await runtime.callTool("pitch_motion_command", {
+    command: "addBuild",
+    slideId: "s1",
+    elementIds: ["title"],
+    kind: "entrance",
+    effect: "fade",
+    trigger: "onClick",
+    durationMs: 400,
+    expectedDeckHash: before.deckHash,
+  });
+  assert.equal(result.ok, true, result.error);
+  let state = await service.state();
+  assert.equal(state.motion.slides[0].builds.length, 1);
+  assert.equal(state.deckHash, before.deckHash);
+  assert.equal(state.motionHistory.canUndo, true);
+
+  const undo = await runtime.callTool("pitch_motion_undo");
+  assert.equal(undo.ok, true, undo.error);
+  state = await service.state();
+  assert.deepEqual(state.motion.slides, []);
+  assert.equal(state.deckHash, before.deckHash);
+});
+
+test("Codex media command preserves the image object while changing native crop", async () => {
+  const { service, runtime } = await setup();
+  const before = await service.state();
+  const result = await runtime.callTool("pitch_media_command", {
+    command: "setImageCrop",
+    slideId: "s1",
+    elementId: "hero_image",
+    crop: { left: .1, top: .05, right: .1, bottom: .05 },
+    expectedDeckHash: before.deckHash,
+  });
+  assert.equal(result.ok, true, result.error);
+  const after = await service.state();
+  const image = after.deck.slides[0].scene.find((element: any) => element.id === "hero_image") as any;
+  assert.equal(image.type, "image");
+  assert.equal(image.assetId, "asset_original");
+  assert.deepEqual(image.crop, { left: .1, top: .05, right: .1, bottom: .05 });
+});
+
+test("Codex can create a reusable component and insert a tagged instance", async () => {
+  const { service, runtime } = await setup();
+  let state = await service.state();
+  const created = await runtime.callTool("pitch_component_command", {
+    command: "createFromSelection",
+    slideId: "s1",
+    selectedIds: ["title"],
+    name: "Decision title",
+    componentId: "component_decision_title",
+    expectedDeckHash: state.deckHash,
+  });
+  assert.equal(created.ok, true, created.error);
+  state = await service.state();
+  assert.equal(state.components.some((component: any) => component.id === "component_decision_title"), true);
+
+  const inserted = await runtime.callTool("pitch_component_command", {
+    command: "insert",
+    slideId: "s1",
+    componentId: "component_decision_title",
+    transform: { x: 300, y: 700 },
+    instanceId: "instance_decision",
+    expectedDeckHash: state.deckHash,
+  });
+  assert.equal(inserted.ok, true, inserted.error);
+  state = await service.state();
+  const instance = state.deck.slides[0].scene.find((element: any) => element.id === "instance_decision_title") as any;
+  assert(instance);
+  assert(instance.tags.includes("component:instance_decision"));
+  assert(instance.tags.includes("component-def:component_decision_title"));
+});
+
+test("project-state tool returns semantic handles plus motion and component summaries", async () => {
   const { runtime } = await setup();
   const result = await runtime.callTool("pitch_project_state");
   assert.equal(result.ok, true);
@@ -108,6 +208,8 @@ test("project-state tool returns semantic object handles rather than raw rich de
   assert.equal(data.deck.slides[0].elements[0].semanticRole, "title");
   assert.equal(data.deck.slides[0].elements[0].geometry.x, 120);
   assert.equal("paragraphs" in data.deck.slides[0].elements[0], false);
+  assert.equal(data.motion.deckId, "deck_tools");
+  assert.deepEqual(data.components, []);
 });
 
 test("unknown Pitch tool fails closed", async () => {
