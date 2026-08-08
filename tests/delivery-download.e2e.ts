@@ -33,7 +33,7 @@ async function setup() {
 
 async function exportWeb(base: string): Promise<any> {
   const response = await fetch(`${base}/api/delivery-export`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ formats: ["web"] }) });
-  assert.equal(response.status, 200, await response.text());
+  if (response.status !== 200) assert.fail(`Delivery export failed (${response.status}): ${await response.text()}`);
   return response.json();
 }
 
