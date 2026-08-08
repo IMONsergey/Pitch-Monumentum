@@ -114,6 +114,39 @@ test("workspace Pro Editor command persists one version with Auto Layout reflow"
   assert.equal(after.history.canUndo, true);
 });
 
+test("workspace copy is non-mutating and paste deep-clones hierarchy in one version", async () => {
+  const service = await setup(autoLayoutDeck());
+  const before = await service.state();
+  const copied = await service.editorCommand({
+    command: "copy",
+    slideId: "s1",
+    selectedIds: ["frame"],
+    expectedDeckHash: before.deckHash,
+  });
+  assert(copied.clipboard);
+  assert.deepEqual(copied.clipboard.rootIds, ["frame"]);
+  assert.equal(copied.clipboard.elements.length, 3);
+  assert.equal(copied.deckHash, before.deckHash);
+  const headAfterCopy = Object.values(copied.manifest.branches[copied.manifest.activeBranchId].heads).find((h: any) => h.kind === "deck") as any;
+  assert.equal(headAfterCopy.version, 1);
+
+  const pasted = await service.editorCommand({
+    command: "paste",
+    slideId: "s1",
+    clipboard: copied.clipboard,
+    offsetDU: 32,
+    expectedDeckHash: copied.deckHash,
+  });
+  assert.equal(pasted.nextSelectionIds.length, 1);
+  assert.notEqual(pasted.nextSelectionIds[0], "frame");
+  const pastedFrame = pasted.deck.slides[0].scene.find((element: any) => element.id === pasted.nextSelectionIds[0]);
+  assert(pastedFrame && pastedFrame.type === "frame");
+  assert.equal(pastedFrame.childIds.length, 2);
+  assert(pastedFrame.childIds.every((id: string) => id !== "a" && id !== "b"));
+  const headAfterPaste = Object.values(pasted.manifest.branches[pasted.manifest.activeBranchId].heads).find((h: any) => h.kind === "deck") as any;
+  assert.equal(headAfterPaste.version, 2);
+});
+
 test("workspace branch edit remains isolated from main", async () => {
   const service = await setup(); const forked = await service.fork("CFO"); const forkId = forked.manifest.activeBranchId;
   const after = await replace(service, "Protect margin first"); assert.equal(after.manifest.activeBranchId, forkId);
