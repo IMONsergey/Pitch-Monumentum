@@ -24,6 +24,9 @@ import {
   type PitchClipboardPayload,
 } from "./index.js";
 
+type TextStylePatch = Partial<Pick<TextRun, "fontFamily" | "fontSizePt" | "color" | "bold" | "italic" | "underline" | "letterSpacingPt">>;
+type PresentationPatch = { name?: string; opacity?: number; locked?: boolean };
+
 export type EditorCommandInput =
   | { command: "nudge"; slideId: string; selectedIds: string[]; dx: number; dy: number }
   | { command: "align"; slideId: string; selectedIds: string[]; alignment: AlignCommand }
@@ -37,8 +40,9 @@ export type EditorCommandInput =
   | { command: "paste"; slideId: string; clipboard: PitchClipboardPayload; offsetDU?: number }
   | { command: "lock"; slideId: string; selectedIds: string[]; locked: boolean }
   | { command: "setGeometry"; slideId: string; elementId: string; geometry: Partial<Geometry> }
-  | { command: "setPresentation"; slideId: string; elementId: string; changes: { name?: string; opacity?: number; locked?: boolean } }
-  | { command: "setTextStyle"; slideId: string; elementId: string; style: Partial<Pick<TextRun, "fontFamily" | "fontSizePt" | "color" | "bold" | "italic" | "underline" | "letterSpacingPt">> }
+  | { command: "setPresentation"; slideId: string; elementId: string; changes: PresentationPatch }
+  | { command: "setTextStyle"; slideId: string; elementId: string; style: TextStylePatch }
+  | { command: "setInspector"; slideId: string; elementId: string; geometry?: Partial<Geometry>; presentation?: PresentationPatch; textStyle?: TextStylePatch }
   | { command: "insertText"; slideId: string; geometry: Geometry; text?: string }
   | { command: "insertShape"; slideId: string; geometry: Geometry; shape?: "rect" | "roundRect" | "ellipse" | "triangle"; fill?: string }
   | { command: "insertFrame"; slideId: string; geometry: Geometry; fill?: string };
@@ -94,6 +98,24 @@ function finiteGeometryPatch(patch: Partial<Geometry>): Partial<Geometry> {
   return result;
 }
 
+function presentationPatch(patch: PresentationPatch): PresentationPatch {
+  const changes = { ...patch };
+  if (changes.opacity !== undefined) {
+    if (!Number.isFinite(changes.opacity)) throw new Error("opacity must be finite");
+    changes.opacity = Math.max(0, Math.min(1, changes.opacity));
+  }
+  return changes;
+}
+
+function styledParagraphs(element: Extract<SceneElement, { type: "text" }>, style: TextStylePatch) {
+  if (style.fontSizePt !== undefined && (!Number.isFinite(style.fontSizePt) || style.fontSizePt <= 0)) throw new Error("fontSizePt must be greater than zero");
+  if (style.letterSpacingPt !== undefined && !Number.isFinite(style.letterSpacingPt)) throw new Error("letterSpacingPt must be finite");
+  return element.paragraphs.map((paragraph) => ({
+    ...paragraph,
+    runs: paragraph.runs.map((run) => ({ ...run, ...style })),
+  }));
+}
+
 function dispatch(slide: SlideDocument, input: Exclude<EditorCommandInput, { command: "copy" }>): EditorCommandResult {
   switch (input.command) {
     case "nudge": return nudgeSelection(slide, input.selectedIds, input.dx, input.dy);
@@ -123,11 +145,7 @@ function dispatch(slide: SlideDocument, input: Exclude<EditorCommandInput, { com
     }
     case "setPresentation": {
       elementById(slide, input.elementId);
-      const changes = { ...input.changes };
-      if (changes.opacity !== undefined) {
-        if (!Number.isFinite(changes.opacity)) throw new Error("opacity must be finite");
-        changes.opacity = Math.max(0, Math.min(1, changes.opacity));
-      }
+      const changes = presentationPatch(input.changes);
       return {
         operations: [{ op: "updateElementPresentation", slideId: slide.id, elementId: input.elementId, changes }],
         nextSelectionIds: changes.locked ? [] : [input.elementId],
@@ -137,16 +155,30 @@ function dispatch(slide: SlideDocument, input: Exclude<EditorCommandInput, { com
     case "setTextStyle": {
       const element = elementById(slide, input.elementId);
       if (element.type !== "text") throw new Error(`Element ${input.elementId} is not text`);
-      if (input.style.fontSizePt !== undefined && (!Number.isFinite(input.style.fontSizePt) || input.style.fontSizePt <= 0)) throw new Error("fontSizePt must be greater than zero");
-      if (input.style.letterSpacingPt !== undefined && !Number.isFinite(input.style.letterSpacingPt)) throw new Error("letterSpacingPt must be finite");
-      const paragraphs = element.paragraphs.map((paragraph) => ({
-        ...paragraph,
-        runs: paragraph.runs.map((run) => ({ ...run, ...input.style })),
-      }));
       return {
-        operations: [{ op: "replaceText", slideId: slide.id, elementId: input.elementId, paragraphs }],
+        operations: [{ op: "replaceText", slideId: slide.id, elementId: input.elementId, paragraphs: styledParagraphs(element, input.style) }],
         nextSelectionIds: [input.elementId],
         affectedAutoLayoutContainerIds: layoutParentIds(slide, input.elementId),
+      };
+    }
+    case "setInspector": {
+      const element = elementById(slide, input.elementId);
+      const operations: DeckMutationOperation[] = [];
+      if (input.geometry && Object.keys(input.geometry).length) {
+        operations.push({ op: "updateGeometry", slideId: slide.id, elementId: input.elementId, geometry: finiteGeometryPatch(input.geometry) });
+      }
+      const presentation = input.presentation ? presentationPatch(input.presentation) : undefined;
+      if (presentation && Object.keys(presentation).length) {
+        operations.push({ op: "updateElementPresentation", slideId: slide.id, elementId: input.elementId, changes: presentation });
+      }
+      if (input.textStyle && Object.keys(input.textStyle).length) {
+        if (element.type !== "text") throw new Error(`Element ${input.elementId} is not text`);
+        operations.push({ op: "replaceText", slideId: slide.id, elementId: input.elementId, paragraphs: styledParagraphs(element, input.textStyle) });
+      }
+      return {
+        operations,
+        nextSelectionIds: presentation?.locked ? [] : [input.elementId],
+        affectedAutoLayoutContainerIds: input.geometry ? layoutParentIds(slide, input.elementId) : [],
       };
     }
     case "insertText": {
@@ -180,6 +212,7 @@ function reasonFor(input: EditorCommandInput): string {
     case "setGeometry": return `Set geometry ${input.elementId}`;
     case "setPresentation": return `Set presentation ${input.elementId}`;
     case "setTextStyle": return `Set text style ${input.elementId}`;
+    case "setInspector": return `Apply Inspector ${input.elementId}`;
     case "insertText": return "Insert text";
     case "insertShape": return "Insert shape";
     case "insertFrame": return "Insert frame";
@@ -188,7 +221,6 @@ function reasonFor(input: EditorCommandInput): string {
 
 export function executeEditorCommand(deck: DeckDocument, input: EditorCommandInput): ExecutedEditorCommand {
   const slide = slideById(deck, input.slideId);
-
   if (input.command === "copy") {
     const clipboard = copySelection(slide, input.selectedIds);
     return { reason: reasonFor(input), operations: [], nextSelectionIds: clipboard.rootIds, reflowedContainerIds: [], clipboard };
@@ -202,13 +234,11 @@ export function executeEditorCommand(deck: DeckDocument, input: EditorCommandInp
   const previewSlide = slideById(preview, input.slideId);
   const reflowedContainerIds: string[] = [];
   const reflowOperations: DeckMutationOperation[] = [];
-
   for (const containerId of [...new Set(command.affectedAutoLayoutContainerIds)]) {
     const container = previewSlide.scene.find((element) => element.id === containerId);
     if (!container || (container.type !== "frame" && container.type !== "group") || !container.layout) continue;
     reflowOperations.push(...autoLayoutMutationOperations(previewSlide, containerId));
     reflowedContainerIds.push(containerId);
   }
-
   return { reason: reasonFor(input), operations: [...operations, ...reflowOperations], nextSelectionIds: command.nextSelectionIds, reflowedContainerIds };
 }
