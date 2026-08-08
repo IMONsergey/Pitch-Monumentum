@@ -115,11 +115,12 @@ async function insertBuiltVector(built: ReturnType<typeof buildPenVector> | Retu
   const slide = editor?.getSlide();
   if (!editor || !slide) throw new Error("Editor is not ready");
   const element = built.element;
+  if (!element.pathData) throw new Error("Vector builder did not produce canonical pathData");
   const result = await editor.command({
     command: "insertVector",
     slideId: slide.id,
     geometry: element.geometry,
-    svgPath: element.svgPath,
+    pathData: element.pathData,
     fill: element.fill,
     stroke: element.stroke,
     name: element.name,
@@ -167,7 +168,7 @@ function onPointerUp(event: PointerEvent): void {
   renderPreview();
   try {
     const built = buildFreehandVector(points, { sizeDU: 18, thinning: 0.55, smoothing: 0.6, streamline: 0.45, simulatePressure: false }, { name: "Pencil stroke", fill: "#111111" });
-    void insertBuiltVector(built).then(() => status("Pencil stroke inserted · vector · one version")).catch(error => status(`Pencil failed: ${error instanceof Error ? error.message : String(error)}`));
+    void insertBuiltVector(built).then(() => status("Pencil stroke inserted · structured vector · one version")).catch(error => status(`Pencil failed: ${error instanceof Error ? error.message : String(error)}`));
   } catch (error) { status(`Pencil failed: ${error instanceof Error ? error.message : String(error)}`); }
 }
 
@@ -185,7 +186,7 @@ async function finishPen(close: boolean): Promise<void> {
   try {
     const built = buildPenVector(anchors, close, close ? { name: "Pen shape", fill: "#111111" } : { name: "Pen path", fill: "transparent", stroke: { color: "#111111", widthDU: 3 } });
     await insertBuiltVector(built);
-    status(`Pen ${close ? "shape" : "path"} inserted · vector · one version`);
+    status(`Pen ${close ? "shape" : "path"} inserted · structured vector · one version`);
   } catch (error) { status(`Pen failed: ${error instanceof Error ? error.message : String(error)}`); }
 }
 
