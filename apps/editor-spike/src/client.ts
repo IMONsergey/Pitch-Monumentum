@@ -53,6 +53,7 @@ const debug: AnyRecord = {
   lastDist: null,
   lastPreview: null,
   lastCommitOperations: 0,
+  dragOwner: "pitch",
 };
 (window as any).__pitchEditorDebug = debug;
 
@@ -213,13 +214,60 @@ async function commitInteraction(reason: string): Promise<void> {
   $("#spikeStatus").textContent = `${reason} committed through DeckMutation · artifact version updated`;
 }
 
-function installDirectSelectedTargetHandoff(scene: HTMLElement): void {
-  scene.addEventListener("mousedown", (event: MouseEvent) => {
-    if (event.button !== 0 || !state.moveable || !state.selectedIds.length) return;
+function selectionMoveBounds(): { minDx: number; maxDx: number; minDy: number; maxDy: number } {
+  const canvas = state.project?.deck.canvas ?? { widthDU: 1920, heightDU: 1080 };
+  const geometries = Object.values(state.baseGeometry);
+  if (!geometries.length) return { minDx: -Infinity, maxDx: Infinity, minDy: -Infinity, maxDy: Infinity };
+  return {
+    minDx: Math.max(...geometries.map((g) => -g.x)),
+    maxDx: Math.min(...geometries.map((g) => canvas.widthDU - (g.x + g.width))),
+    minDy: Math.max(...geometries.map((g) => -g.y)),
+    maxDy: Math.min(...geometries.map((g) => canvas.heightDU - (g.y + g.height))),
+  };
+}
+
+function installPitchPointerDrag(scene: HTMLElement, stage: HTMLElement): void {
+  scene.addEventListener("pointerdown", (event: PointerEvent) => {
+    if (event.button !== 0 || !state.selectedIds.length) return;
     const target = (event.target as Element | null)?.closest<HTMLElement>(".selectable");
     if (!target || !state.selectedIds.includes(target.dataset.id ?? "")) return;
+
+    event.preventDefault();
     event.stopPropagation();
-    state.moveable.dragStart(event);
+    debug.dragStarts += 1;
+    beginInteraction("Move");
+
+    const startClientX = event.clientX;
+    const startClientY = event.clientY;
+    const stageRect = stage.getBoundingClientRect();
+    const scaleX = stageRect.width / 1920 || 1;
+    const scaleY = stageRect.height / 1080 || 1;
+    const bounds = selectionMoveBounds();
+
+    const onMove = (moveEvent: PointerEvent) => {
+      debug.dragEvents += 1;
+      let dx = (moveEvent.clientX - startClientX) / scaleX;
+      let dy = (moveEvent.clientY - startClientY) / scaleY;
+      dx = Math.max(bounds.minDx, Math.min(bounds.maxDx, dx));
+      dy = Math.max(bounds.minDy, Math.min(bounds.maxDy, dy));
+      debug.lastDist = [dx, dy];
+      for (const [id, base] of Object.entries(state.baseGeometry)) {
+        applyGeometryPreview(id, { x: Math.round(base.x + dx), y: Math.round(base.y + dy) });
+      }
+      state.moveable?.updateRect?.();
+    };
+
+    const onUp = () => {
+      debug.dragEnds += 1;
+      window.removeEventListener("pointermove", onMove, true);
+      window.removeEventListener("pointerup", onUp, true);
+      window.removeEventListener("pointercancel", onUp, true);
+      void commitInteraction("Move selection");
+    };
+
+    window.addEventListener("pointermove", onMove, true);
+    window.addEventListener("pointerup", onUp, true);
+    window.addEventListener("pointercancel", onUp, true);
   }, true);
 }
 
@@ -233,7 +281,7 @@ function installInteractionEngine(): void {
 
   state.moveable = new Moveable(stage, {
     target: selectedTargets(),
-    draggable: true,
+    draggable: false,
     resizable: true,
     rotatable: true,
     scalable: false,
@@ -246,25 +294,6 @@ function installInteractionEngine(): void {
   });
 
   state.moveable
-    .on("dragStart", () => {
-      debug.dragStarts += 1;
-      beginInteraction("Move");
-    })
-    .on("drag", ({ target, beforeDist, dist }: AnyRecord) => {
-      debug.dragEvents += 1;
-      const node = target as HTMLElement;
-      const id = node.dataset.id;
-      if (!id) return;
-      const base = state.baseGeometry[id];
-      if (!base) return;
-      const distance = beforeDist ?? dist ?? [0, 0];
-      debug.lastDist = distance;
-      applyGeometryPreview(id, { x: Math.round(base.x + distance[0]), y: Math.round(base.y + distance[1]) });
-    })
-    .on("dragEnd", () => {
-      debug.dragEnds += 1;
-      void commitInteraction("Move selection");
-    })
     .on("resizeStart", () => beginInteraction("Resize"))
     .on("resize", ({ target, width, height, drag }: AnyRecord) => {
       debug.resizeEvents += 1;
@@ -298,19 +327,6 @@ function installInteractionEngine(): void {
       });
     })
     .on("rotateEnd", () => void commitInteraction("Rotate selection"))
-    .on("dragGroupStart", () => beginInteraction("Move group"))
-    .on("dragGroup", ({ events }: AnyRecord) => {
-      events.forEach((child: AnyRecord) => {
-        const node = child.target as HTMLElement;
-        const id = node.dataset.id;
-        if (!id) return;
-        const base = state.baseGeometry[id];
-        if (!base) return;
-        const distance = child.beforeDist ?? child.dist ?? [0, 0];
-        applyGeometryPreview(id, { x: Math.round(base.x + distance[0]), y: Math.round(base.y + distance[1]) });
-      });
-    })
-    .on("dragGroupEnd", () => void commitInteraction("Move selection group"))
     .on("resizeGroupStart", () => beginInteraction("Resize group"))
     .on("resizeGroup", ({ events }: AnyRecord) => {
       events.forEach((child: AnyRecord) => {
@@ -365,17 +381,10 @@ function installInteractionEngine(): void {
     })
     .on("selectEnd", (event: AnyRecord) => {
       const ids = (event.selected as Element[]).map((element) => (element as HTMLElement).dataset.id).filter((id): id is string => Boolean(id));
-      if (event.isDragStart && event.inputEvent && state.moveable) {
-        event.inputEvent.preventDefault?.();
-        const handoff = state.moveable.waitToChangeTarget?.();
-        updateSelection(ids);
-        Promise.resolve(handoff).then(() => state.moveable?.dragStart(event.inputEvent));
-        return;
-      }
       updateSelection(ids);
     });
 
-  installDirectSelectedTargetHandoff(scene);
+  installPitchPointerDrag(scene, stage);
 }
 
 function installViewportAndGuides(): void {
@@ -391,6 +400,7 @@ function installViewportAndGuides(): void {
     zoom: 0.55,
     rangeX: [-600, 2600],
     rangeY: [-500, 1600],
+    useMouseDrag: false,
   });
 
   state.horizontalGuide = new Guides($("#spikeGuideX") as HTMLElement, { type: "horizontal", zoom: 0.55, unit: 100 });
@@ -419,7 +429,7 @@ async function load(): Promise<void> {
   state.slideId = project.deck.slides[0]?.id ?? null;
   renderAll();
   installViewportAndGuides();
-  $("#spikeStatus").textContent = "Daybrush engine attached to live Pitch SceneGraph";
+  $("#spikeStatus").textContent = "Pitch pointer engine + Daybrush controls attached to live SceneGraph";
 }
 
 $("#spikeClearSelection").addEventListener("click", () => updateSelection([]));
