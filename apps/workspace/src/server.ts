@@ -96,6 +96,16 @@ export class PitchWorkspaceService {
     };
   }
 
+  async editorUndo() {
+    const next = await this.undo();
+    return { ...next, nextSelectionIds: [], reflowedContainerIds: [], commandReason: "Undo" };
+  }
+
+  async editorRedo() {
+    const next = await this.redo();
+    return { ...next, nextSelectionIds: [], reflowedContainerIds: [], commandReason: "Redo" };
+  }
+
   async setAutoLayout(input: { slideId: string; elementId: string; layout: AutoLayoutSpec; expectedDeckHash?: string }) {
     const current = await this.state();
     if (input.expectedDeckHash && input.expectedDeckHash !== current.deckHash) {
@@ -175,7 +185,13 @@ export function createWorkspaceServer(projectRoot: string) {
       if (req.method === "GET" && url.pathname === "/editor-spike.js") { res.writeHead(200, { "content-type": "text/javascript; charset=utf-8", "cache-control": "no-store" }); res.end(await staticAsset("editor-spike.js")); return; }
       if (req.method === "GET" && url.pathname === "/api/project") { json(res, 200, await service.state()); return; }
       if (req.method === "POST" && url.pathname === "/api/mutate") { json(res, 200, await service.mutate(await body(req))); return; }
-      if (req.method === "POST" && url.pathname === "/api/editor-command") { json(res, 200, await service.editorCommand(await body(req))); return; }
+      if (req.method === "POST" && url.pathname === "/api/editor-command") {
+        const data = await body(req);
+        if (data.command === "undo") { json(res, 200, await service.editorUndo()); return; }
+        if (data.command === "redo") { json(res, 200, await service.editorRedo()); return; }
+        json(res, 200, await service.editorCommand(data));
+        return;
+      }
       if (req.method === "POST" && url.pathname === "/api/auto-layout") {
         const data = await body(req);
         if (!data.slideId || !data.elementId || !data.layout) throw new Error("slideId, elementId and layout are required");
