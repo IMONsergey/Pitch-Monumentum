@@ -36,6 +36,7 @@ const selectionFields = {
 const expectedDeckHash = { type: "string" };
 const geometry = { type: "object", properties: { x: { type: "number" }, y: { type: "number" }, width: { type: "number", exclusiveMinimum: 0 }, height: { type: "number", exclusiveMinimum: 0 }, rotation: { type: "number" } }, required: ["x", "y", "width", "height"], additionalProperties: false };
 const crop = { type: "object", properties: { left: { type: "number", minimum: 0, maximum: .999999 }, top: { type: "number", minimum: 0, maximum: .999999 }, right: { type: "number", minimum: 0, maximum: .999999 }, bottom: { type: "number", minimum: 0, maximum: .999999 } }, required: ["left", "top", "right", "bottom"], additionalProperties: false };
+const focalPoint = { type: "object", properties: { x: { type: "number", minimum: 0, maximum: 1 }, y: { type: "number", minimum: 0, maximum: 1 } }, required: ["x", "y"], additionalProperties: false };
 const componentTransform = { type: "object", properties: { x: { type: "number" }, y: { type: "number" }, scaleX: { type: "number", exclusiveMinimum: 0 }, scaleY: { type: "number", exclusiveMinimum: 0 } }, required: ["x", "y"], additionalProperties: false };
 
 export const PITCH_TOOL_DEFINITIONS: PitchToolDefinition[] = [
@@ -99,14 +100,14 @@ export const PITCH_TOOL_DEFINITIONS: PitchToolDefinition[] = [
   },
   {
     name: "pitch_media_command",
-    description: "Edit image fit, normalized crop, corner radius or linked asset identity while keeping the image object editable in the canonical deck.",
+    description: "Edit image fit, normalized crop, focal point, native clip geometry, corner radius or linked asset identity while keeping the image object editable in the canonical deck.",
     readOnly: false,
     inputSchema: {
       type: "object",
       properties: {
-        command: { enum: ["setImageProperties", "setImageFit", "setImageCrop", "replaceImageAsset", "setImageCornerRadius"] },
-        slideId: { type: "string" }, elementId: { type: "string" }, fit: { enum: ["cover", "contain", "stretch"] }, crop: { anyOf: [crop, { type: "null" }] }, assetId: { type: "string" }, alt: { anyOf: [{ type: "string" }, { type: "null" }] }, cornerRadiusDU: { anyOf: [{ type: "number", minimum: 0 }, { type: "null" }] },
-        changes: { type: "object", properties: { fit: { enum: ["cover", "contain", "stretch"] }, crop: { anyOf: [crop, { type: "null" }] }, assetId: { type: "string" }, alt: { anyOf: [{ type: "string" }, { type: "null" }] }, cornerRadiusDU: { anyOf: [{ type: "number", minimum: 0 }, { type: "null" }] } }, additionalProperties: false },
+        command: { enum: ["setImageProperties", "setImageFit", "setImageCrop", "setImageFocalPoint", "setImageClipShape", "replaceImageAsset", "setImageCornerRadius"] },
+        slideId: { type: "string" }, elementId: { type: "string" }, fit: { enum: ["cover", "contain", "stretch"] }, crop: { anyOf: [crop, { type: "null" }] }, focalPoint: { anyOf: [focalPoint, { type: "null" }] }, clipShape: { anyOf: [{ enum: ["rect", "roundRect", "ellipse"] }, { type: "null" }] }, assetId: { type: "string" }, alt: { anyOf: [{ type: "string" }, { type: "null" }] }, cornerRadiusDU: { anyOf: [{ type: "number", minimum: 0 }, { type: "null" }] },
+        changes: { type: "object", properties: { fit: { enum: ["cover", "contain", "stretch"] }, crop: { anyOf: [crop, { type: "null" }] }, focalPoint: { anyOf: [focalPoint, { type: "null" }] }, clipShape: { anyOf: [{ enum: ["rect", "roundRect", "ellipse"] }, { type: "null" }] }, assetId: { type: "string" }, alt: { anyOf: [{ type: "string" }, { type: "null" }] }, cornerRadiusDU: { anyOf: [{ type: "number", minimum: 0 }, { type: "null" }] } }, additionalProperties: false },
         expectedDeckHash,
       },
       required: ["command", "slideId", "elementId"], additionalProperties: false,
@@ -152,7 +153,7 @@ export class PitchToolRuntime {
               id: state.deck?.id,
               title: state.deck?.title,
               canvas: state.deck?.canvas,
-              slides: (state.deck?.slides ?? []).map((slide: any) => ({ id: slide.id, order: slide.order, title: slide.title, archetype: slide.archetype, status: slide.status, purpose: slide.semantic?.purpose, takeaway: slide.semantic?.takeaway, elements: (slide.scene ?? []).map((element: any) => ({ id: element.id, name: element.name, type: element.type, semanticRole: element.semanticRole, geometry: element.geometry, locked: Boolean(element.locked), assetId: element.assetId, componentInstanceId: element.tags?.find((tag: string) => tag.startsWith("component:"))?.slice("component:".length), componentId: element.tags?.find((tag: string) => tag.startsWith("component-def:"))?.slice("component-def:".length) })) }))
+              slides: (state.deck?.slides ?? []).map((slide: any) => ({ id: slide.id, order: slide.order, title: slide.title, archetype: slide.archetype, status: slide.status, purpose: slide.semantic?.purpose, takeaway: slide.semantic?.takeaway, elements: (slide.scene ?? []).map((element: any) => ({ id: element.id, name: element.name, type: element.type, semanticRole: element.semanticRole, geometry: element.geometry, locked: Boolean(element.locked), assetId: element.assetId, fit: element.fit, crop: element.crop, focalPoint: element.focalPoint, clipShape: element.clipShape, componentInstanceId: element.tags?.find((tag: string) => tag.startsWith("component:"))?.slice("component:".length), componentId: element.tags?.find((tag: string) => tag.startsWith("component-def:"))?.slice("component-def:".length) })) }))
             },
             qa: state.qa,
             history: state.history,
