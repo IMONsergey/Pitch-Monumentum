@@ -5,6 +5,7 @@ import { installPitchHistoryShortcuts } from "./history-shortcuts.js";
 import { installPitchInspectorUI } from "./inspector-ui.js";
 import { installPitchVisualStyleUI } from "./visual-style-ui.js";
 import { installPitchAppearanceUI } from "./appearance-ui.js";
+import { installPitchVectorUI } from "./vector-ui.js";
 import { installPitchSlideUI } from "./slide-ui.js";
 import "./client.js";
 
@@ -15,4 +16,5 @@ installPitchHistoryShortcuts();
 installPitchInspectorUI();
 installPitchVisualStyleUI();
 installPitchAppearanceUI();
+installPitchVectorUI();
 installPitchSlideUI();
