@@ -20,8 +20,18 @@ test("Daybrush editor spike commits a real drag into the canonical deck", async 
   const before = await fetch(`${base}/api/project`).then((response) => response.json()) as any;
   const slide = before.deck.slides[0];
   assert(slide.scene.length > 0);
-  const targetId = slide.scene[0].id;
-  const beforeGeometry = structuredClone(slide.scene[0].geometry);
+  const canvas = before.deck.canvas;
+  const targetElement = slide.scene.find((element: any) => {
+    const geometry = element.geometry;
+    return !element.locked
+      && geometry.width > 0
+      && geometry.height > 0
+      && geometry.x + geometry.width + 80 < canvas.widthDU
+      && geometry.y + geometry.height + 60 < canvas.heightDU;
+  });
+  assert(targetElement, "Demo deck needs at least one movable scene element with free canvas space");
+  const targetId = targetElement.id;
+  const beforeGeometry = structuredClone(targetElement.geometry);
 
   const browser = await chromium.launch({ headless: true });
   try {
@@ -47,7 +57,6 @@ test("Daybrush editor spike commits a real drag into the canonical deck", async 
     const after = await fetch(`${base}/api/project`).then((response) => response.json()) as any;
     const afterElement = after.deck.slides[0].scene.find((element: any) => element.id === targetId);
     assert(afterElement);
-    assert.notDeepEqual(afterElement.geometry, beforeGeometry);
     assert(afterElement.geometry.x !== beforeGeometry.x || afterElement.geometry.y !== beforeGeometry.y);
     assert.notEqual(after.deckHash, before.deckHash);
   } finally {
