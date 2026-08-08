@@ -32,7 +32,7 @@ async function importAndInsert(base: string): Promise<{ assetId: string; imageId
   return { assetId: imported.asset.id, imageId: inserted.nextSelectionIds[0] };
 }
 
-test("selected image enters Crop Mode, focal drag commits canonical state, and ellipse clip renders", async () => {
+test("selected image enters Crop Mode, crop/focal drags commit canonical state, and ellipse clip renders", async () => {
   const h = await harness();
   try {
     const { imageId } = await importAndInsert(h.base);
@@ -44,7 +44,7 @@ test("selected image enters Crop Mode, focal drag commits canonical state, and e
     await h.page.locator("#pitchCropOverlay.open").waitFor({ state: "visible", timeout: 10_000 });
 
     const focal = h.page.locator("#pitchCropOverlay .pitch-focal-handle");
-    const overlay = await h.page.locator("#pitchCropOverlay").boundingBox();
+    let overlay = await h.page.locator("#pitchCropOverlay").boundingBox();
     const focalBox = await focal.boundingBox();
     assert(overlay && focalBox);
     await h.page.mouse.move(focalBox.x + focalBox.width / 2, focalBox.y + focalBox.height / 2);
@@ -56,6 +56,21 @@ test("selected image enters Crop Mode, focal drag commits canonical state, and e
       const project = await fetch("/api/project").then(response => response.json());
       const image = project.deck.slides.flatMap((slide: any) => slide.scene).find((element: any) => element.id === id);
       return image?.focalPoint?.x > .75 && image?.focalPoint?.y > .25 && image?.focalPoint?.y < .45;
+    }, imageId, { timeout: 10_000 });
+
+    await h.page.locator("#pitchCropOverlay.open").waitFor({ state: "visible" });
+    overlay = await h.page.locator("#pitchCropOverlay").boundingBox();
+    const leftHandle = await h.page.locator("#pitchCropOverlay [data-edge=left]").boundingBox();
+    assert(overlay && leftHandle);
+    await h.page.mouse.move(leftHandle.x + leftHandle.width / 2, leftHandle.y + leftHandle.height / 2);
+    await h.page.mouse.down();
+    await h.page.mouse.move(leftHandle.x + leftHandle.width / 2 + overlay.width * .12, leftHandle.y + leftHandle.height / 2, { steps: 6 });
+    await h.page.mouse.up();
+
+    await h.page.waitForFunction(async (id) => {
+      const project = await fetch("/api/project").then(response => response.json());
+      const image = project.deck.slides.flatMap((slide: any) => slide.scene).find((element: any) => element.id === id);
+      return image?.crop?.left > .05;
     }, imageId, { timeout: 10_000 });
 
     await h.page.locator("#pitchCropOverlay [data-crop-done]").click();
