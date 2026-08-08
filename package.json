@@ -13,6 +13,7 @@
     "test": "npm run build && node --test dist/tests/*.test.js",
     "test:editor-e2e": "npm run build && node --test --test-concurrency=1 dist/tests/*.e2e.js",
     "check": "npm run typecheck && npm run test",
+    "release:preflight": "node scripts/release-preflight-full.mjs",
     "demo": "npm run build && node dist/apps/cli/src/index.js demo .pitch-demo",
     "status": "npm run build && node dist/apps/cli/src/index.js status .pitch-demo",
     "serve": "npm run build && node dist/apps/demo/src/server.js .pitch-demo 4173",
