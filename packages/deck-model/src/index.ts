@@ -139,6 +139,47 @@ export interface Geometry {
   rotation?: number;
 }
 
+export interface NoPaint {
+  kind: "none";
+}
+
+export interface SolidPaint {
+  kind: "solid";
+  color: string;
+  opacity?: number;
+}
+
+export interface GradientStop {
+  position: number;
+  color: string;
+  opacity?: number;
+}
+
+export interface LinearGradientPaint {
+  kind: "linearGradient";
+  angleDeg: number;
+  stops: GradientStop[];
+}
+
+export type Paint = NoPaint | SolidPaint | LinearGradientPaint;
+
+export interface StrokeStyle {
+  color: string;
+  widthDU: number;
+  dash?: "solid" | "dash" | "dot";
+}
+
+export interface DropShadowEffect {
+  kind: "dropShadow";
+  color: string;
+  opacity: number;
+  blurDU: number;
+  offsetXDU: number;
+  offsetYDU: number;
+}
+
+export type VisualEffect = DropShadowEffect;
+
 export interface AutoLayoutPadding {
   top: number;
   right: number;
@@ -201,6 +242,7 @@ export interface SceneElementBase {
   groupId?: string;
   layoutItem?: LayoutItemSpec;
   opacity?: number;
+  effects?: VisualEffect[];
   origin: ElementOrigin;
   exportStrategy: ExportStrategy;
   dependencies: ElementDependency[];
@@ -247,8 +289,10 @@ export interface ImageElement extends SceneElementBase {
 export interface ShapeElement extends SceneElementBase {
   type: "shape";
   shape: "rect" | "roundRect" | "ellipse" | "triangle" | "custom";
+  /** Legacy solid fill shorthand. fillPaint takes precedence when present. */
   fill?: string;
-  stroke?: { color: string; widthDU: number; dash?: "solid" | "dash" | "dot" };
+  fillPaint?: Paint;
+  stroke?: StrokeStyle;
   radiusDU?: number;
   svgPath?: string;
 }
@@ -257,7 +301,7 @@ export interface LineElement extends SceneElementBase {
   type: "line";
   start: [number, number];
   end: [number, number];
-  stroke: { color: string; widthDU: number; dash?: "solid" | "dash" | "dot" };
+  stroke: StrokeStyle;
   startMarker?: "none" | "arrow" | "dot";
   endMarker?: "none" | "arrow" | "dot";
 }
@@ -332,8 +376,10 @@ export interface FrameElement extends SceneElementBase {
   type: "frame";
   childIds: string[];
   layout?: AutoLayoutSpec;
+  /** Legacy solid fill shorthand. fillPaint takes precedence when present. */
   fill?: string;
-  stroke?: { color: string; widthDU: number; dash?: "solid" | "dash" | "dot" };
+  fillPaint?: Paint;
+  stroke?: StrokeStyle;
   radiusDU?: number;
   clipContent?: boolean;
 }
