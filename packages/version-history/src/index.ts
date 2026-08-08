@@ -60,6 +60,14 @@ export class VersionJournal {
     await this.write(journal);
   }
 
+  async forkFromHeads(newBranchId: string, heads: Record<string, BranchArtifactHead>): Promise<void> {
+    const journal = await this.read();
+    const next: Record<string, ArtifactHistory> = {};
+    for (const [artifactId, head] of Object.entries(heads)) next[artifactId] = { entries: [clone(head)], cursor: 0 };
+    journal.branches[newBranchId] = next;
+    await this.write(journal);
+  }
+
   async undo(branchId: string, artifactId: string): Promise<BranchArtifactHead> {
     return this.move(branchId, artifactId, -1);
   }
