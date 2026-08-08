@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { createServer } from "node:http";
 import { mkdir, readFile } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { basename, extname, join, resolve } from "node:path";
 import { ArtifactStore, type ProjectManifest, type BranchArtifactHead } from "../../../packages/artifact-store/src/index.js";
 import { AssetRegistry, type ImageMimeType } from "../../../packages/assets/src/index.js";
 import type { AutoLayoutSpec, DeckDocument, ImageElement } from "../../../packages/deck-model/src/index.js";
@@ -9,6 +9,10 @@ import { applyDeckMutation, createMutation, deckHash, type DeckMutationOperation
 import { setAutoLayoutMutationOperations, wrapSelectionInAutoLayoutOperations } from "../../../packages/auto-layout/src/index.js";
 import { runDeterministicQA } from "../../../packages/qa/src/index.js";
 import { exportProductionPptx } from "../../../packages/export-pipeline/src/index.js";
+import { writeFigmaBridgeBundle } from "../../../packages/figma-bridge/src/index.js";
+import { exportDeckToKeynote } from "../../../packages/keynote-bridge/src/index.js";
+import { GeneratedAssetService, type ImageGenerationRequest, type ImageGenerator } from "../../../packages/image-generation/src/index.js";
+import { openAIImageGeneratorFromEnv } from "../../../packages/image-generation/src/openai.js";
 import { VersionJournal } from "../../../packages/version-history/src/index.js";
 import { editorSpikeHtml, workspaceHtml } from "./ui.js";
 
@@ -37,16 +41,40 @@ function fittedImageSize(widthPx: number, heightPx: number, widthDU?: number, he
   return { width: Math.max(1, Math.round(widthPx * scale)), height: Math.max(1, Math.round(heightPx * scale)) };
 }
 
+function imageAssetIds(deck: DeckDocument): Set<string> {
+  return new Set(deck.slides.flatMap((slide) => slide.scene
+    .filter((element): element is ImageElement => element.type === "image")
+    .map((element) => element.assetId)));
+}
+
+function downloadUrl(path: string): string {
+  return `/api/exports/${encodeURIComponent(basename(path))}`;
+}
+
+function exportContentType(path: string): string {
+  const extension = extname(path).toLowerCase();
+  if (extension === ".pptx") return "application/vnd.openxmlformats-officedocument.presentationml.presentation";
+  if (extension === ".key") return "application/octet-stream";
+  return "application/json; charset=utf-8";
+}
+
+export interface PitchWorkspaceServiceOptions {
+  imageGenerator?: ImageGenerator;
+}
+
 export class PitchWorkspaceService {
   readonly root: string;
   readonly store: ArtifactStore;
   readonly journal: VersionJournal;
   readonly assets: AssetRegistry;
-  constructor(root: string) {
+  readonly imageGenerator?: ImageGenerator;
+
+  constructor(root: string, options: PitchWorkspaceServiceOptions = {}) {
     this.root = resolve(root);
     this.store = new ArtifactStore(this.root);
     this.journal = new VersionJournal(this.root);
     this.assets = new AssetRegistry(this.root);
+    this.imageGenerator = options.imageGenerator;
   }
 
   async state() {
@@ -119,6 +147,8 @@ export class PitchWorkspaceService {
     widthDU?: number;
     heightDU?: number;
     expectedDeckHash?: string;
+    origin?: "user" | "agent";
+    name?: string;
   }) {
     const current = await this.state();
     if (input.expectedDeckHash && input.expectedDeckHash !== current.deckHash) {
@@ -137,16 +167,16 @@ export class PitchWorkspaceService {
     const element: ImageElement = {
       id: `image_${randomUUID()}`,
       type: "image",
-      name: record.originalName,
+      name: input.name ?? record.originalName,
       semanticRole: "visual",
       geometry: { x, y, width: size.width, height: size.height },
       zIndex: Math.max(0, ...slide.scene.map((item) => item.zIndex)) + 1,
-      origin: "user",
+      origin: input.origin ?? "user",
       exportStrategy: "native",
       dependencies: [{ kind: "asset", id: record.id }],
       assetId: record.id,
       fit: "cover",
-      alt: record.originalName,
+      alt: input.name ?? record.originalName,
     };
     const next = await this.mutate({
       reason: `Insert image asset ${record.id}`,
@@ -185,6 +215,34 @@ export class PitchWorkspaceService {
     });
   }
 
+  async generateImage(input: ImageGenerationRequest & {
+    slideId?: string;
+    xDU?: number;
+    yDU?: number;
+    widthDU?: number;
+    heightDU?: number;
+    expectedDeckHash?: string;
+  }) {
+    const authoredAgainst = await this.state();
+    if (input.expectedDeckHash && input.expectedDeckHash !== authoredAgainst.deckHash) {
+      throw new Error(`Deck changed before image generation started: expected ${input.expectedDeckHash}, got ${authoredAgainst.deckHash}`);
+    }
+    const generator = this.imageGenerator ?? openAIImageGeneratorFromEnv();
+    const generated = await new GeneratedAssetService(this.assets, generator).generate(input);
+    const inserted = await this.insertImageAsset({
+      assetId: generated.asset.id,
+      slideId: input.slideId,
+      xDU: input.xDU,
+      yDU: input.yDU,
+      widthDU: input.widthDU,
+      heightDU: input.heightDU,
+      expectedDeckHash: authoredAgainst.deckHash,
+      origin: "agent",
+      name: `AI · ${input.prompt.trim().slice(0, 72)}`,
+    });
+    return { ...inserted, generation: generated.generated };
+  }
+
   async fork(name: string) {
     const before = await this.state();
     const parentId = before.manifest.activeBranchId;
@@ -207,23 +265,57 @@ export class PitchWorkspaceService {
     await this.journal.redo(current.manifest.activeBranchId, head.id);
     return this.state();
   }
+
   async exportPptx() {
     const current = await this.state();
     const head = activeHeadByKind(current.manifest, "deck")!;
     const dir = join(this.root, ".project", "exports");
     await mkdir(dir, { recursive: true });
     const path = join(dir, `${current.deck.id}-v${head.version}.pptx`);
-    const imageAssetIds = new Set(current.deck.slides.flatMap((slide) => slide.scene
-      .filter((element): element is ImageElement => element.type === "image")
-      .map((element) => element.assetId)));
-    const assets = await this.assets.resolveRichAssets(imageAssetIds);
+    const assets = await this.assets.resolveRichAssets(imageAssetIds(current.deck));
     const manifest = await exportProductionPptx(current.deck, path, { assets });
-    return { path, manifest };
+    return { path, downloadUrl: downloadUrl(path), manifest };
+  }
+
+  async exportFigma() {
+    const current = await this.state();
+    const head = activeHeadByKind(current.manifest, "deck")!;
+    const dir = join(this.root, ".project", "exports");
+    await mkdir(dir, { recursive: true });
+    const path = join(dir, `${current.deck.id}-v${head.version}.pitch-figma.json`);
+    const bundle = await writeFigmaBridgeBundle(current.deck, this.assets, path);
+    return {
+      path,
+      downloadUrl: downloadUrl(path),
+      warnings: bundle.warnings,
+      slideCount: bundle.deck.slides.length,
+      assetCount: Object.keys(bundle.assets).length,
+    };
+  }
+
+  async exportKeynote() {
+    const current = await this.state();
+    const head = activeHeadByKind(current.manifest, "deck")!;
+    const dir = join(this.root, ".project", "exports");
+    await mkdir(dir, { recursive: true });
+    const path = join(dir, `${current.deck.id}-v${head.version}.key`);
+    const assets = await this.assets.resolveRichAssets(imageAssetIds(current.deck));
+    const result = await exportDeckToKeynote(current.deck, path, { assets });
+    return { ...result, downloadUrl: downloadUrl(result.outputPath) };
+  }
+
+  async readExport(fileName: string): Promise<{ fileName: string; contentType: string; bytes: Buffer }> {
+    const safe = basename(fileName);
+    if (!safe || safe !== fileName) throw new Error("Invalid export file name");
+    const extension = extname(safe).toLowerCase();
+    if (![".pptx", ".json", ".key"].includes(extension)) throw new Error(`Unsupported export download: ${extension}`);
+    const path = join(this.root, ".project", "exports", safe);
+    return { fileName: safe, contentType: exportContentType(path), bytes: await readFile(path) };
   }
 }
 
-export function createWorkspaceServer(projectRoot: string) {
-  const service = new PitchWorkspaceService(projectRoot);
+export function createWorkspaceServer(projectRoot: string, options: PitchWorkspaceServiceOptions = {}) {
+  const service = new PitchWorkspaceService(projectRoot, options);
   const server = createServer(async (req: any, res: any) => {
     try {
       const url = new URL(req.url ?? "/", "http://local");
@@ -246,6 +338,18 @@ export function createWorkspaceServer(projectRoot: string) {
         res.end(bytes);
         return;
       }
+      if (req.method === "GET" && url.pathname.startsWith("/api/exports/")) {
+        const fileName = decodeURIComponent(url.pathname.slice("/api/exports/".length));
+        const file = await service.readExport(fileName);
+        res.writeHead(200, {
+          "content-type": file.contentType,
+          "content-length": String(file.bytes.length),
+          "content-disposition": `attachment; filename=\"${file.fileName.replace(/\"/g, "")}\"`,
+          "cache-control": "no-store",
+        });
+        res.end(file.bytes);
+        return;
+      }
       if (req.method === "POST" && url.pathname === "/api/mutate") { json(res, 200, await service.mutate(await body(req))); return; }
       if (req.method === "POST" && url.pathname === "/api/auto-layout") {
         const data = await body(req);
@@ -261,11 +365,14 @@ export function createWorkspaceServer(projectRoot: string) {
       }
       if (req.method === "POST" && url.pathname === "/api/assets/upload") { json(res, 200, await service.uploadImage(await body(req))); return; }
       if (req.method === "POST" && url.pathname === "/api/assets/insert") { json(res, 200, await service.insertImageAsset(await body(req))); return; }
+      if (req.method === "POST" && url.pathname === "/api/images/generate") { json(res, 200, await service.generateImage(await body(req))); return; }
       if (req.method === "POST" && url.pathname === "/api/branch") { const data = await body(req); if (!data.name) throw new Error("Branch name required"); json(res, 200, await service.fork(data.name)); return; }
       if (req.method === "POST" && url.pathname === "/api/checkout") { const data = await body(req); if (!data.branchId) throw new Error("branchId required"); json(res, 200, await service.checkout(data.branchId)); return; }
       if (req.method === "POST" && url.pathname === "/api/undo") { json(res, 200, await service.undo()); return; }
       if (req.method === "POST" && url.pathname === "/api/redo") { json(res, 200, await service.redo()); return; }
       if (req.method === "POST" && url.pathname === "/api/export") { json(res, 200, await service.exportPptx()); return; }
+      if (req.method === "POST" && url.pathname === "/api/export/figma") { json(res, 200, await service.exportFigma()); return; }
+      if (req.method === "POST" && url.pathname === "/api/export/keynote") { json(res, 200, await service.exportKeynote()); return; }
       json(res, 404, { error: "Not found" });
     } catch (error) {
       json(res, 400, { error: error instanceof Error ? error.message : String(error) });
