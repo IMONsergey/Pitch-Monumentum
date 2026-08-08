@@ -6,6 +6,7 @@ import { PitchToolRuntime } from "../../../packages/pitch-tools/src/index.js";
 import { brandCoverage, runBrandQA } from "../../../packages/brand-qa/src/index.js";
 import { runSlideMasterQA } from "../../../packages/slide-master-qa/src/index.js";
 import { validateMotionDocument } from "../../../packages/motion-engine/src/index.js";
+import type { CreativeRunAuditRecord } from "../../../packages/creative-director/src/audit.js";
 import {
   buildCreativeDirectorPlan,
   reviewCreativeExecution,
@@ -42,6 +43,13 @@ export interface CreativeActionTrace {
   error?: string;
 }
 
+export interface CreativeAuditArtifactSummary {
+  id: string;
+  version: number;
+  contentHash: string;
+  branchId: string;
+}
+
 export interface CreativeDirectorExecutionResult {
   validation: CreativeExecutionValidation;
   executed: boolean;
@@ -51,6 +59,7 @@ export interface CreativeDirectorExecutionResult {
   previewBranchId?: string;
   traces: CreativeActionTrace[];
   review?: CreativeExecutionReview;
+  auditArtifact?: CreativeAuditArtifactSummary;
   rejectedPreviewReturnedToOriginal: boolean;
   error?: string;
 }
@@ -151,6 +160,46 @@ function previewName(bundle: CreativeExecutionBundle): string {
   return requested || `Creative ${bundle.requestId.slice(0, 28)} ${randomUUID().slice(0, 6)}`;
 }
 
+async function recordAudit(
+  service: PitchWorkspaceService,
+  input: {
+    plan: CreativeDirectorPlan;
+    bundle: CreativeExecutionBundle;
+    validation: CreativeExecutionValidation;
+    originalBranchId: string;
+    executionBranchId: string;
+    previewBranchId?: string;
+    traces: CreativeActionTrace[];
+    review?: CreativeExecutionReview;
+    rejectedPreviewReturnedToOriginal: boolean;
+    error?: string;
+  },
+): Promise<CreativeAuditArtifactSummary> {
+  const id = `creative_run_${randomUUID()}`;
+  const record: CreativeRunAuditRecord = {
+    schemaVersion: "0.1",
+    id,
+    requestId: input.plan.requestId,
+    deckId: input.plan.deckId,
+    createdAt: new Date().toISOString(),
+    originalBranchId: input.originalBranchId,
+    executionBranchId: input.executionBranchId,
+    previewBranchId: input.previewBranchId,
+    effectiveMode: input.validation.effectiveMode,
+    plan: structuredClone(input.plan),
+    validation: structuredClone(input.validation),
+    actions: structuredClone(input.bundle.actions),
+    traces: structuredClone(input.traces),
+    review: input.review ? structuredClone(input.review) : undefined,
+    accepted: input.review?.accepted,
+    rejectedPreviewReturnedToOriginal: input.rejectedPreviewReturnedToOriginal,
+    error: input.error,
+  };
+  const artifact = await service.store.write({ id, kind: "creativeRun", payload: record, producer: { type: "codex" } });
+  const state = await service.state();
+  return { id: artifact.id, version: artifact.version, contentHash: artifact.contentHash, branchId: state.manifest.activeBranchId };
+}
+
 export class CreativeDirectorRuntime {
   readonly service: PitchWorkspaceService;
   readonly tools: PitchToolRuntime;
@@ -206,16 +255,23 @@ export class CreativeDirectorRuntime {
 
       const afterInput = await collectCreativeReviewInput(this.service);
       const review = reviewCreativeExecution(plan, afterInput, acceptanceResults);
-      if (!review.accepted && previewBranchId) {
+      const rejectedPreviewReturnedToOriginal = Boolean(!review.accepted && previewBranchId);
+      const auditArtifact = await recordAudit(this.service, { plan, bundle, validation, originalBranchId, executionBranchId, previewBranchId, traces, review, rejectedPreviewReturnedToOriginal });
+      if (rejectedPreviewReturnedToOriginal) {
         await this.service.checkout(originalBranchId);
-        return { validation, executed: true, originalBranchId, executionBranchId, activeBranchId: originalBranchId, previewBranchId, traces, review, rejectedPreviewReturnedToOriginal: true };
+        return { validation, executed: true, originalBranchId, executionBranchId, activeBranchId: originalBranchId, previewBranchId, traces, review, auditArtifact, rejectedPreviewReturnedToOriginal: true };
       }
       const final = await this.service.state();
-      return { validation, executed: true, originalBranchId, executionBranchId, activeBranchId: final.manifest.activeBranchId, previewBranchId, traces, review, rejectedPreviewReturnedToOriginal: false };
+      return { validation, executed: true, originalBranchId, executionBranchId, activeBranchId: final.manifest.activeBranchId, previewBranchId, traces, review, auditArtifact, rejectedPreviewReturnedToOriginal: false };
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      let auditArtifact: CreativeAuditArtifactSummary | undefined;
+      try {
+        auditArtifact = await recordAudit(this.service, { plan, bundle, validation, originalBranchId, executionBranchId, previewBranchId, traces, rejectedPreviewReturnedToOriginal: Boolean(previewBranchId), error: message });
+      } catch {}
       if (previewBranchId) await this.service.checkout(originalBranchId).catch(() => undefined);
       const current = await this.service.state();
-      return { validation, executed: true, originalBranchId, executionBranchId, activeBranchId: current.manifest.activeBranchId, previewBranchId, traces, rejectedPreviewReturnedToOriginal: Boolean(previewBranchId), error: error instanceof Error ? error.message : String(error) };
+      return { validation, executed: true, originalBranchId, executionBranchId, activeBranchId: current.manifest.activeBranchId, previewBranchId, traces, auditArtifact, rejectedPreviewReturnedToOriginal: Boolean(previewBranchId), error: message };
     }
   }
 }
