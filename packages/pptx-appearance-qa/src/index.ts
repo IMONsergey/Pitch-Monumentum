@@ -36,8 +36,8 @@ function colorAndOpacity(body: string): { color: string; opacity: number } | und
 }
 
 function inspectPaint(spPr: string): InspectedPaint | undefined {
-  if (/<a:noFill\s*\/>/.test(spPr)) return { kind: "none" };
-  const gradient = spPr.match(/<a:gradFill(?:\s[^>]*)?>([\s\S]*?)<\/a:gradFill>/)?.[1];
+  const fillSection = spPr.split(/<a:ln(?:\s|>)/)[0];
+  const gradient = fillSection.match(/<a:gradFill(?:\s[^>]*)?>([\s\S]*?)<\/a:gradFill>/)?.[1];
   if (gradient) {
     const stops = [...gradient.matchAll(/<a:gs\s+[^>]*pos="(\d+)"[^>]*>([\s\S]*?)<\/a:gs>/g)].flatMap((match) => {
       const parsed = colorAndOpacity(match[2]);
@@ -47,11 +47,12 @@ function inspectPaint(spPr: string): InspectedPaint | undefined {
     const drawingAngle = Number(attr(opening, "ang") ?? 0) / 60000;
     return { kind: "linearGradient", angleDeg: (drawingAngle + 90) % 360, stops };
   }
-  const solid = spPr.match(/<a:solidFill>([\s\S]*?)<\/a:solidFill>/)?.[1];
+  const solid = fillSection.match(/<a:solidFill>([\s\S]*?)<\/a:solidFill>/)?.[1];
   if (solid) {
     const parsed = colorAndOpacity(solid);
     if (parsed) return { kind: "solid", ...parsed };
   }
+  if (/<a:noFill\s*\/>/.test(fillSection)) return { kind: "none" };
   return undefined;
 }
 
