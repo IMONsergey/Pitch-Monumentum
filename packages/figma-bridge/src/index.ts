@@ -1,4 +1,5 @@
 import type { DeckDocument, SceneElement, TextParagraph } from "../../deck-model/src/index.js";
+import { vectorPathDataToSvgPath } from "../../vector-path/src/index.js";
 
 export interface FigmaBridgeAsset {
   assetId: string;
@@ -79,8 +80,11 @@ function textPayload(paragraphs: TextParagraph[]) {
 
 function nodePayload(element: SceneElement): Record<string, unknown> {
   if (element.type === "text") return { ...textPayload(element.paragraphs), verticalAlign: element.verticalAlign, insetsDU: element.insetsDU, fitPolicy: element.fitPolicy };
-  if (element.type === "image") return { assetId: element.assetId, fit: element.fit, crop: element.crop, focalPoint: (element as any).focalPoint, clipShape: (element as any).clipShape, cornerRadiusDU: element.cornerRadiusDU, alt: element.alt };
-  if (element.type === "shape") return { shape: element.shape, fill: element.fill, fillPaint: element.fillPaint, stroke: element.stroke, radiusDU: element.radiusDU, pathData: element.pathData, svgPath: element.svgPath, effects: element.effects };
+  if (element.type === "image") return { assetId: element.assetId, fit: element.fit, crop: element.crop, focalPoint: element.focalPoint, clipShape: element.clipShape, cornerRadiusDU: element.cornerRadiusDU, alt: element.alt };
+  if (element.type === "shape") {
+    const svgPath = element.svgPath ?? (element.pathData ? vectorPathDataToSvgPath(element.pathData) : undefined);
+    return { shape: element.shape, fill: element.fill, fillPaint: element.fillPaint, stroke: element.stroke, radiusDU: element.radiusDU, pathData: element.pathData, svgPath, effects: element.effects };
+  }
   if (element.type === "line") return { start: element.start, end: element.end, stroke: element.stroke, startMarker: element.startMarker, endMarker: element.endMarker };
   if (element.type === "frame") return { childIds: element.childIds, layout: element.layout, fill: element.fill, fillPaint: element.fillPaint, stroke: element.stroke, radiusDU: element.radiusDU, clipContent: element.clipContent, effects: element.effects };
   if (element.type === "group") return { childIds: element.childIds, layout: element.layout };
