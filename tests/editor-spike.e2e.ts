@@ -109,10 +109,14 @@ test("in-canvas Lexical editing persists mixed formatting as canonical TextRuns"
     let slide: any;
     let textElement: any;
     for (const candidate of before.deck.slides) {
-      const found = candidate.scene.find((element: any) => element.type === "text" && !element.locked);
+      const found = candidate.scene.find((element: any) => {
+        if (element.type !== "text" || element.locked) return false;
+        const runs = element.paragraphs.flatMap((paragraph: any) => paragraph.runs);
+        return runs.length > 0 && runs.every((run: any) => !run.bold);
+      });
       if (found) { slide = candidate; textElement = found; break; }
     }
-    assert(slide && textElement, "Demo deck needs an unlocked text element");
+    assert(slide && textElement, "Demo deck needs an unlocked initially non-bold text element");
     const originalText = textElement.paragraphs.flatMap((paragraph: any) => paragraph.runs.map((run: any) => run.text)).join("");
 
     await page.goto(`${base}/editor-spike`, { waitUntil: "networkidle" });
