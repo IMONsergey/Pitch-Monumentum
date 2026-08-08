@@ -79,6 +79,7 @@ export class PitchWorkspaceService {
         nextSelectionIds: executed.nextSelectionIds,
         reflowedContainerIds: executed.reflowedContainerIds,
         commandReason: executed.reason,
+        clipboard: executed.clipboard,
       };
     }
     const next = await this.mutate({
@@ -91,6 +92,7 @@ export class PitchWorkspaceService {
       nextSelectionIds: executed.nextSelectionIds,
       reflowedContainerIds: executed.reflowedContainerIds,
       commandReason: executed.reason,
+      clipboard: executed.clipboard,
     };
   }
 
