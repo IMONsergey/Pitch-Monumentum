@@ -64,16 +64,18 @@ function textPayload(paragraphs: TextParagraph[]) {
   let offset = 0;
   const ranges: Array<Record<string, unknown>> = [];
   const paragraphsOut = paragraphs.map((paragraph, paragraphIndex) => {
+    const start = offset;
     const runs = paragraph.runs.map((run) => {
-      const start = offset;
+      const runStart = offset;
       offset += run.text.length;
       const end = offset;
-      ranges.push({ start, end, paragraphIndex, bold: Boolean(run.bold), italic: Boolean(run.italic), underline: Boolean(run.underline), color: run.color, fontFamily: run.fontFamily, fontSizePt: run.fontSizePt, letterSpacingPt: run.letterSpacingPt });
+      ranges.push({ start: runStart, end, paragraphIndex, bold: Boolean(run.bold), italic: Boolean(run.italic), underline: Boolean(run.underline), color: run.color, fontFamily: run.fontFamily, fontSizePt: run.fontSizePt, letterSpacingPt: run.letterSpacingPt });
       return run.text;
     });
     const value = runs.join("");
+    const end = offset;
     if (paragraphIndex < paragraphs.length - 1) offset += 1;
-    return { text: value, align: paragraph.align, bullet: paragraph.bullet, lineSpacing: paragraph.lineSpacing, spaceBeforePt: paragraph.spaceBeforePt, spaceAfterPt: paragraph.spaceAfterPt };
+    return { start, end, text: value, align: paragraph.align, bullet: paragraph.bullet, lineSpacing: paragraph.lineSpacing, spaceBeforePt: paragraph.spaceBeforePt, spaceAfterPt: paragraph.spaceAfterPt };
   });
   return { characters: paragraphsOut.map((paragraph) => paragraph.text).join("\n"), paragraphs: paragraphsOut, ranges };
 }
