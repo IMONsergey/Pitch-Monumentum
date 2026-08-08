@@ -7,7 +7,7 @@ import { applyDeckMutation, createMutation, deckHash, type DeckMutationOperation
 import { setAutoLayoutMutationOperations, wrapSelectionInAutoLayoutOperations } from "../../../packages/auto-layout/src/index.js";
 import { executeEditorCommand, type EditorCommandInput } from "../../../packages/editor-commands/src/service.js";
 import { executeSlideCommand, isSlideCommand, type SlideCommandInput } from "../../../packages/slide-commands/src/index.js";
-import { executePitchEditorTool, pitchEditorToolDefinition, type PitchEditorToolCall } from "../../../packages/codex-editor-tools/src/index.js";
+import { executePitchCodexTool, pitchCodexToolDefinitions, type PitchCodexToolCall } from "../../../packages/codex-editor-tools/src/index.js";
 import { runDeterministicQA } from "../../../packages/qa/src/index.js";
 import { exportProductionPptx } from "../../../packages/export-pipeline/src/index.js";
 import { VersionJournal } from "../../../packages/version-history/src/index.js";
@@ -98,23 +98,23 @@ export class PitchWorkspaceService {
     return this.writeDeckVersion({ current, deck: applied.deck, reason: mutation.reason, impact: applied.impact });
   }
 
-  async codexTool(call: PitchEditorToolCall) {
+  async codexTool(call: PitchCodexToolCall) {
     const current = await this.state();
-    const normalizedCall: PitchEditorToolCall = {
+    const normalizedCall: PitchCodexToolCall = {
       ...call,
       expectedDeckHash: call.expectedDeckHash ?? current.deckHash,
-    };
-    const result = executePitchEditorTool(current.deck, normalizedCall);
+    } as PitchCodexToolCall;
+    const result = executePitchCodexTool(current.deck, normalizedCall);
     const next = await this.writeDeckVersion({
       current,
       deck: result.applied.deck,
-      reason: `Codex tool: ${result.command}`,
+      reason: `Codex tool ${result.tool}: ${result.command}`,
       impact: result.applied.impact,
       producer: "codex",
     });
     return {
       ...next,
-      tool: normalizedCall.name,
+      tool: result.tool,
       command: result.command,
       mutationId: result.mutationId,
       nextSelectionIds: result.nextSelectionIds,
@@ -261,7 +261,7 @@ export function createWorkspaceServer(projectRoot: string) {
       if (req.method === "GET" && url.pathname === "/workspace.js") { res.writeHead(200, { "content-type": "text/javascript; charset=utf-8", "cache-control": "no-store" }); res.end(await staticAsset("workspace.js")); return; }
       if (req.method === "GET" && url.pathname === "/editor-spike.js") { res.writeHead(200, { "content-type": "text/javascript; charset=utf-8", "cache-control": "no-store" }); res.end(await staticAsset("editor-spike.js")); return; }
       if (req.method === "GET" && url.pathname === "/api/project") { json(res, 200, await service.state()); return; }
-      if (req.method === "GET" && url.pathname === "/api/codex/tools") { json(res, 200, { tools: [pitchEditorToolDefinition] }); return; }
+      if (req.method === "GET" && url.pathname === "/api/codex/tools") { json(res, 200, { tools: pitchCodexToolDefinitions }); return; }
       if (req.method === "POST" && url.pathname === "/api/codex/tool") { json(res, 200, await service.codexTool(await body(req))); return; }
       if (req.method === "POST" && url.pathname === "/api/mutate") { json(res, 200, await service.mutate(await body(req))); return; }
       if (req.method === "POST" && url.pathname === "/api/editor-command") {
