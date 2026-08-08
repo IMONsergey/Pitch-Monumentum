@@ -4,6 +4,7 @@ import { readFile, rm, writeFile } from "node:fs/promises";
 import type { DeckDocument } from "../packages/deck-model/src/index.js";
 import { exportProductionPptx, ProductionExportBlockedError } from "../packages/export-pipeline/src/index.js";
 import { inspectPptx } from "../packages/pptx-roundtrip/src/index.js";
+import { readZipMap } from "../packages/source-ingest/src/zip.js";
 
 const out = "/tmp/pitchos-production.pptx";
 const png = "/tmp/pitchos-production-dot.png";
@@ -35,6 +36,37 @@ test("production export gates, compiles rich native objects, flattens structural
   assert.ok(inspected.entryNames.includes("ppt/embeddings/Microsoft_Excel_Worksheet1.xlsx"));
   const diskManifest = JSON.parse(await readFile(`${out}.manifest.json`, "utf8"));
   assert.equal(diskManifest.outputHash, manifest.outputHash);
+});
+
+test("production export reports custom freeform paths as vector and never unsupported", async () => {
+  await writeFile(png, Buffer.from(onePx, "base64"));
+  const deck = fixture();
+  deck.slides[0].scene.push({
+    id: "freehand",
+    type: "shape",
+    name: "Freehand mark",
+    semanticRole: "visual",
+    geometry: { x: 200, y: 830, width: 360, height: 120 },
+    zIndex: 8,
+    origin: "user",
+    exportStrategy: "vector",
+    dependencies: [],
+    shape: "custom",
+    fill: "#335CFF",
+    stroke: { color: "#111111", widthDU: 2 },
+    svgPath: "M 0 70 C 80 10 160 120 240 55 L 360 95 Z",
+  });
+  const vectorOut = "/tmp/pitchos-production-vector.pptx";
+  const manifest = await exportProductionPptx(deck, vectorOut, { assets: { asset: { path: png, mimeType: "image/png" } } });
+  assert.equal(manifest.ready, true);
+  assert.equal(manifest.editability.vector, 1);
+  assert.equal(manifest.editability.unsupported, 0);
+  assert.deepEqual(manifest.unsupportedElementIds, []);
+  assert.equal(manifest.roundTripIssues.some((issue) => issue.severity === "critical"), false);
+  assert(manifest.warnings.some((warning) => warning.includes("freehand") && warning.includes("SVG")));
+  const zip = readZipMap(await readFile(vectorOut));
+  assert([...zip.keys()].some((name) => /^ppt\/media\/image\d+\.svg$/.test(name)));
+  assert.match(zip.get("ppt/slides/slide1.xml")!.toString("utf8"), /<p:pic>/);
 });
 
 test("production export blocks unsupported native scatter instead of silently dropping the chart", async () => {
