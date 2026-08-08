@@ -28,6 +28,7 @@ const requiredPublic = [
   "apps/workspace/public/delivery-ui.js",
 ];
 
+execFileSync(process.execPath, ["scripts/release-preflight-full.mjs"], { cwd: root, stdio: "inherit" });
 for (const path of requiredPublic) if (!existsSync(resolve(root, path))) throw new Error(`Missing full-stack public source: ${path}`);
 execFileSync("npm", ["run", "build"], { cwd: root, stdio: "inherit" });
 for (const path of requiredAfterBuild) if (!existsSync(resolve(root, path))) throw new Error(`Build did not emit required full-stack entry: ${path}`);
