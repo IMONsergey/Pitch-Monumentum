@@ -71,11 +71,7 @@ export interface PresentationBrief {
   artifactAfterlife?: string;
   sourceDivergence: string;
   readingMode: "presentation" | "balanced" | "reader";
-  pageBudget: {
-    min: number;
-    target: number;
-    max: number;
-  };
+  pageBudget: { min: number; target: number; max: number };
   mustInclude: string[];
   mustNotChange: string[];
   brandConstraints: string[];
@@ -143,6 +139,37 @@ export interface Geometry {
   rotation?: number;
 }
 
+export interface AutoLayoutPadding {
+  top: number;
+  right: number;
+  bottom: number;
+  left: number;
+}
+
+export type AutoLayoutSizing = "fixed" | "hug" | "fill";
+
+export interface LayoutItemSpec {
+  width?: AutoLayoutSizing;
+  height?: AutoLayoutSizing;
+  grow?: number;
+  alignSelf?: "auto" | "start" | "center" | "end" | "stretch";
+  minWidthDU?: number;
+  maxWidthDU?: number;
+  minHeightDU?: number;
+  maxHeightDU?: number;
+}
+
+export interface AutoLayoutSpec {
+  direction: "horizontal" | "vertical";
+  gapDU: number;
+  padding: AutoLayoutPadding;
+  justify: "start" | "center" | "end" | "spaceBetween" | "spaceAround" | "spaceEvenly";
+  align: "start" | "center" | "end" | "stretch";
+  wrap?: boolean;
+  widthSizing?: "fixed" | "hug";
+  heightSizing?: "fixed" | "hug";
+}
+
 export interface ElementDependency {
   kind: "claim" | "evidence" | "asset" | "designToken" | "dataset";
   id: string;
@@ -172,6 +199,7 @@ export interface SceneElementBase {
   zIndex: number;
   locked?: boolean;
   groupId?: string;
+  layoutItem?: LayoutItemSpec;
   opacity?: number;
   origin: ElementOrigin;
   exportStrategy: ExportStrategy;
@@ -297,6 +325,17 @@ export interface DiagramElement extends SceneElementBase {
 export interface GroupElement extends SceneElementBase {
   type: "group";
   childIds: string[];
+  layout?: AutoLayoutSpec;
+}
+
+export interface FrameElement extends SceneElementBase {
+  type: "frame";
+  childIds: string[];
+  layout?: AutoLayoutSpec;
+  fill?: string;
+  stroke?: { color: string; widthDU: number; dash?: "solid" | "dash" | "dot" };
+  radiusDU?: number;
+  clipContent?: boolean;
 }
 
 export interface VideoElement extends SceneElementBase {
@@ -315,6 +354,7 @@ export type SceneElement =
   | IconElement
   | DiagramElement
   | GroupElement
+  | FrameElement
   | VideoElement;
 
 export type SlideArchetype =
