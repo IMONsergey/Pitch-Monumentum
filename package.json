@@ -1,9 +1,9 @@
 {
   "name": "pitch-monumentum",
-  "version": "0.2.0-preview.1",
+  "version": "0.3.0-preview.1",
   "private": true,
   "type": "module",
-  "main": "dist/apps/desktop/src/main.js",
+  "main": "dist/apps/desktop-full/src/main.js",
   "description": "AI-native presentation development environment powered by PitchOS",
   "engines": {"node": ">=22"},
   "scripts": {
@@ -16,10 +16,14 @@
     "demo": "npm run build && node dist/apps/cli/src/index.js demo .pitch-demo",
     "status": "npm run build && node dist/apps/cli/src/index.js status .pitch-demo",
     "serve": "npm run build && node dist/apps/demo/src/server.js .pitch-demo 4173",
-    "workspace": "npm run build && node dist/apps/workspace/src/server.js .pitch-demo 4173",
-    "desktop": "npm run build && electron dist/apps/desktop/src/main.js",
-    "package:mac:x64": "npm run build && electron-builder --mac dmg --x64 --publish never",
-    "pitch:mcp": "npm run build && node dist/apps/pitch-mcp/src/server.js .pitch-demo"
+    "workspace": "npm run build && node dist/apps/workspace/src/full-server.js .pitch-demo 4173",
+    "workspace:core": "npm run build && node dist/apps/workspace/src/server.js .pitch-demo 4173",
+    "desktop": "npm run build && electron dist/apps/desktop-full/src/main.js",
+    "desktop:core": "npm run build && electron dist/apps/desktop/src/main.js",
+    "package:mac:x64": "node scripts/package-desktop-full.mjs",
+    "package:mac:x64:core": "npm run build && electron-builder --mac dmg --x64 --publish never",
+    "pitch:mcp": "npm run build && node dist/apps/pitch-mcp-full/src/server.js .pitch-demo",
+    "pitch:mcp:core": "npm run build && node dist/apps/pitch-mcp/src/server.js .pitch-demo"
   },
   "dependencies": {
     "@lexical/history": "^0.48.0",
