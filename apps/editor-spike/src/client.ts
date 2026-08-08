@@ -113,7 +113,10 @@ function selectedTargets(): HTMLElement[] {
 function updateSelection(ids: string[]): void {
   state.selectedIds = [...new Set(ids)];
   document.querySelectorAll<HTMLElement>("#spikeScene .selectable").forEach((element) => element.classList.toggle("selected", state.selectedIds.includes(element.dataset.id ?? "")));
-  if (state.moveable) state.moveable.target = selectedTargets();
+  if (state.moveable) {
+    state.moveable.target = selectedTargets();
+    state.moveable.updateRect?.();
+  }
   $("#spikeSelection").textContent = state.selectedIds.length ? `${state.selectedIds.length} selected · ${state.selectedIds.join(", ")}` : "Nothing selected";
 }
 
@@ -225,12 +228,28 @@ function installInteractionEngine(): void {
     selectableTargets: ["#spikeScene .selectable"],
     selectByClick: true,
     selectFromInside: false,
+    preventDragFromInside: false,
     toggleContinueSelect: "shift",
     hitRate: 20,
   });
-  state.selecto.on("selectEnd", ({ selected }: AnyRecord) => {
-    updateSelection((selected as Element[]).map((element) => (element as HTMLElement).dataset.id).filter((id): id is string => Boolean(id)));
-  });
+  state.selecto
+    .on("dragStart", (event: AnyRecord) => {
+      const target = event.inputEvent?.target as Node | null;
+      if (!target) return;
+      const selected = selectedTargets();
+      if (state.moveable?.isMoveableElement?.(target) || selected.some((element) => element === target || element.contains(target))) {
+        event.stop();
+      }
+    })
+    .on("selectEnd", async (event: AnyRecord) => {
+      const ids = (event.selected as Element[]).map((element) => (element as HTMLElement).dataset.id).filter((id): id is string => Boolean(id));
+      updateSelection(ids);
+      if (event.isDragStart && event.inputEvent && state.moveable) {
+        event.inputEvent.preventDefault?.();
+        await state.moveable.waitToChangeTarget?.();
+        state.moveable.dragStart(event.inputEvent);
+      }
+    });
 }
 
 function installViewportAndGuides(): void {
