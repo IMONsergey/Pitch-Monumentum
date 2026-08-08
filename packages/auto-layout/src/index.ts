@@ -213,6 +213,15 @@ function selectedBounds(elements: SceneElement[]): Geometry {
   return { x: left, y: top, width: right - left, height: bottom - top };
 }
 
+function spatialOrder(elements: SceneElement[], direction: AutoLayoutSpec["direction"]): SceneElement[] {
+  return [...elements].sort((a, b) => {
+    if (direction === "horizontal") {
+      return a.geometry.x - b.geometry.x || a.geometry.y - b.geometry.y || a.zIndex - b.zIndex || a.id.localeCompare(b.id);
+    }
+    return a.geometry.y - b.geometry.y || a.geometry.x - b.geometry.x || a.zIndex - b.zIndex || a.id.localeCompare(b.id);
+  });
+}
+
 export function wrapSelectionInAutoLayoutOperations(
   slide: SlideDocument,
   selectedIds: string[],
@@ -227,13 +236,16 @@ export function wrapSelectionInAutoLayoutOperations(
     throw new Error("Cannot wrap a frame together with its own child");
   }
 
-  const bounds = selectedBounds(elements);
+  const direction = options.direction ?? "horizontal";
+  const orderedElements = spatialOrder(elements, direction);
+  const orderedIds = orderedElements.map((element) => element.id);
+  const bounds = selectedBounds(orderedElements);
   const padding = options.paddingDU ?? 24;
   const frameId = options.frameId ?? `frame_${randomUUID()}`;
   if (slide.scene.some((element) => element.id === frameId)) throw new Error(`Frame id already exists: ${frameId}`);
 
   const layout: AutoLayoutSpec = {
-    direction: options.direction ?? "horizontal",
+    direction,
     gapDU: options.gapDU ?? 24,
     padding: { top: padding, right: padding, bottom: padding, left: padding },
     justify: "start",
@@ -247,18 +259,19 @@ export function wrapSelectionInAutoLayoutOperations(
     name: "Auto Layout",
     semanticRole: "visual",
     geometry: { x: bounds.x - padding, y: bounds.y - padding, width: bounds.width + padding * 2, height: bounds.height + padding * 2 },
-    zIndex: Math.min(...elements.map((element) => element.zIndex)) - 1,
+    zIndex: Math.min(...orderedElements.map((element) => element.zIndex)) - 1,
     origin: "user",
     exportStrategy: "native",
     dependencies: [],
-    childIds: uniqueIds,
+    childIds: orderedIds,
     layout,
     fill: options.fill,
     radiusDU: options.radiusDU,
     clipContent: false,
   };
 
-  const previewChildren = slide.scene.map((element) => uniqueIds.includes(element.id)
+  const selectedSet = new Set(orderedIds);
+  const previewChildren = slide.scene.map((element) => selectedSet.has(element.id)
     ? { ...element, layoutItem: element.layoutItem ?? { width: "fixed", height: "fixed" } as LayoutItemSpec }
     : element);
   const previewSlide: SlideDocument = { ...slide, scene: [...previewChildren, frame] };
@@ -266,7 +279,7 @@ export function wrapSelectionInAutoLayoutOperations(
 
   const operations: DeckMutationOperation[] = [
     { op: "addElement", slideId: slide.id, element: frame },
-    ...elements.filter((element) => !element.layoutItem).map((element) => ({
+    ...orderedElements.filter((element) => !element.layoutItem).map((element) => ({
       op: "updateLayoutItem" as const,
       slideId: slide.id,
       elementId: element.id,
