@@ -1,6 +1,6 @@
-import type { DeckDocument, Geometry, SceneElement, SlideDocument, TextRun } from "../../deck-model/src/index.js";
+import type { DeckDocument, Geometry, Paint, SceneElement, SlideDocument, TextRun, VisualEffect } from "../../deck-model/src/index.js";
 import { autoLayoutMutationOperations } from "../../auto-layout/src/index.js";
-import { applyDeckMutation, createMutation, type DeckMutationOperation, type ElementStylePatch } from "../../mutations/src/index.js";
+import { applyDeckMutation, createMutation, type DeckMutationOperation, type ElementAppearancePatch, type ElementStylePatch } from "../../mutations/src/index.js";
 import {
   alignSelection,
   arrangeSelection,
@@ -43,7 +43,8 @@ export type EditorCommandInput =
   | { command: "setPresentation"; slideId: string; elementId: string; changes: PresentationPatch }
   | { command: "setTextStyle"; slideId: string; elementId: string; style: TextStylePatch }
   | { command: "setStyle"; slideId: string; elementId: string; style: ElementStylePatch }
-  | { command: "setInspector"; slideId: string; elementId: string; geometry?: Partial<Geometry>; presentation?: PresentationPatch; textStyle?: TextStylePatch; style?: ElementStylePatch }
+  | { command: "setAppearance"; slideId: string; elementId: string; appearance: ElementAppearancePatch }
+  | { command: "setInspector"; slideId: string; elementId: string; geometry?: Partial<Geometry>; presentation?: PresentationPatch; textStyle?: TextStylePatch; style?: ElementStylePatch; appearance?: ElementAppearancePatch }
   | { command: "insertText"; slideId: string; geometry: Geometry; text?: string }
   | { command: "insertShape"; slideId: string; geometry: Geometry; shape?: "rect" | "roundRect" | "ellipse" | "triangle"; fill?: string }
   | { command: "insertFrame"; slideId: string; geometry: Geometry; fill?: string };
@@ -127,6 +128,13 @@ function stylePatch(element: SceneElement, style: ElementStylePatch): ElementSty
   return structuredClone(style);
 }
 
+function appearancePatch(element: SceneElement, appearance: ElementAppearancePatch): ElementAppearancePatch {
+  if ((appearance.fillPaint !== undefined || appearance.clearFillPaint) && element.type !== "shape" && element.type !== "frame") {
+    throw new Error(`Element ${element.id} cannot have fillPaint`);
+  }
+  return structuredClone(appearance);
+}
+
 function styledParagraphs(element: Extract<SceneElement, { type: "text" }>, style: TextStylePatch) {
   if (style.fontSizePt !== undefined && (!Number.isFinite(style.fontSizePt) || style.fontSizePt <= 0)) throw new Error("fontSizePt must be greater than zero");
   if (style.letterSpacingPt !== undefined && !Number.isFinite(style.letterSpacingPt)) throw new Error("letterSpacingPt must be finite");
@@ -189,6 +197,14 @@ function dispatch(slide: SlideDocument, input: Exclude<EditorCommandInput, { com
         affectedAutoLayoutContainerIds: [],
       };
     }
+    case "setAppearance": {
+      const element = elementById(slide, input.elementId);
+      return {
+        operations: [{ op: "updateElementAppearance", slideId: slide.id, elementId: input.elementId, appearance: appearancePatch(element, input.appearance) }],
+        nextSelectionIds: [input.elementId],
+        affectedAutoLayoutContainerIds: [],
+      };
+    }
     case "setInspector": {
       const element = elementById(slide, input.elementId);
       const operations: DeckMutationOperation[] = [];
@@ -203,9 +219,8 @@ function dispatch(slide: SlideDocument, input: Exclude<EditorCommandInput, { com
         if (element.type !== "text") throw new Error(`Element ${input.elementId} is not text`);
         operations.push({ op: "replaceText", slideId: slide.id, elementId: input.elementId, paragraphs: styledParagraphs(element, input.textStyle) });
       }
-      if (input.style) {
-        operations.push({ op: "updateElementStyle", slideId: slide.id, elementId: input.elementId, style: stylePatch(element, input.style) });
-      }
+      if (input.style) operations.push({ op: "updateElementStyle", slideId: slide.id, elementId: input.elementId, style: stylePatch(element, input.style) });
+      if (input.appearance) operations.push({ op: "updateElementAppearance", slideId: slide.id, elementId: input.elementId, appearance: appearancePatch(element, input.appearance) });
       return {
         operations,
         nextSelectionIds: presentation?.locked ? [] : [input.elementId],
@@ -244,6 +259,7 @@ function reasonFor(input: EditorCommandInput): string {
     case "setPresentation": return `Set presentation ${input.elementId}`;
     case "setTextStyle": return `Set text style ${input.elementId}`;
     case "setStyle": return `Set visual style ${input.elementId}`;
+    case "setAppearance": return `Set appearance ${input.elementId}`;
     case "setInspector": return `Apply Inspector ${input.elementId}`;
     case "insertText": return "Insert text";
     case "insertShape": return "Insert shape";
