@@ -118,7 +118,7 @@ export function reconcileMotionDocument(deck: DeckDocument, input?: MotionDocume
       };
     })
     .filter((slideMotion) => Boolean(slideMotion.transition || slideMotion.tracks.length || slideMotion.builds.length));
-  const next = { ...motion, deckId: deck.id, slides };
+  const next: MotionDocument = { ...motion, deckId: deck.id, slides };
   validateResult(deck, next);
   return next;
 }
@@ -196,24 +196,25 @@ export function executeMotionCommand(deck: DeckDocument, inputMotion: MotionDocu
     }
 
     if (command.command === "setTrack") {
-      [command.elementId] = assertElementIds(deck, command.slideId, [command.elementId]);
-      affectedElementIds = [command.elementId];
+      const [elementId] = assertElementIds(deck, command.slideId, [command.elementId]);
+      affectedElementIds = [elementId];
       const existingIndex = command.trackId
         ? slideMotion.tracks.findIndex((track) => track.id === command.trackId)
-        : slideMotion.tracks.findIndex((track) => track.elementId === command.elementId && track.property === command.property);
+        : slideMotion.tracks.findIndex((track) => track.elementId === elementId && track.property === command.property);
       const existing = existingIndex >= 0 ? slideMotion.tracks[existingIndex] : undefined;
-      nextTrackId = existing?.id ?? command.trackId?.trim() || `track_${randomUUID()}`;
+      const trackId = existing?.id ?? (command.trackId?.trim() || `track_${randomUUID()}`);
+      nextTrackId = trackId;
       const track: MotionTrack = {
-        id: nextTrackId,
+        id: trackId,
         slideId: command.slideId,
-        elementId: command.elementId,
+        elementId,
         property: command.property,
         keyframes: clone(command.keyframes),
         enabled: command.enabled ?? existing?.enabled ?? true,
       };
       if (existingIndex >= 0) slideMotion.tracks[existingIndex] = track;
       else slideMotion.tracks.push(track);
-      reason = `Set ${command.property} motion on ${command.elementId}`;
+      reason = `Set ${command.property} motion on ${elementId}`;
     }
 
     if (command.command === "deleteTrack") {
