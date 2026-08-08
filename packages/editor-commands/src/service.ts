@@ -1,7 +1,7 @@
 import type { DeckDocument, Geometry, SceneElement, SlideDocument, TextRun, VectorPathData } from "../../deck-model/src/index.js";
 import { autoLayoutMutationOperations } from "../../auto-layout/src/index.js";
 import { applyDeckMutation, createMutation, type DeckMutationOperation, type ElementAppearancePatch, type ElementStylePatch } from "../../mutations/src/index.js";
-import { validateVectorPathData, vectorPathToSvg } from "../../vector-path/src/index.js";
+import { translateVectorPath, validateVectorPathData, vectorPathBounds, vectorPathToSvg } from "../../vector-path/src/index.js";
 import {
   alignSelection,
   arrangeSelection,
@@ -45,7 +45,7 @@ export type EditorCommandInput =
   | { command: "setTextStyle"; slideId: string; elementId: string; style: TextStylePatch }
   | { command: "setStyle"; slideId: string; elementId: string; style: ElementStylePatch }
   | { command: "setAppearance"; slideId: string; elementId: string; appearance: ElementAppearancePatch }
-  | { command: "setVectorPath"; slideId: string; elementId: string; pathData: VectorPathData }
+  | { command: "setVectorPath"; slideId: string; elementId: string; pathData: VectorPathData; fitBounds?: boolean }
   | { command: "setInspector"; slideId: string; elementId: string; geometry?: Partial<Geometry>; presentation?: PresentationPatch; textStyle?: TextStylePatch; style?: ElementStylePatch; appearance?: ElementAppearancePatch }
   | { command: "insertText"; slideId: string; geometry: Geometry; text?: string }
   | { command: "insertShape"; slideId: string; geometry: Geometry; shape?: "rect" | "roundRect" | "ellipse" | "triangle"; fill?: string }
@@ -136,6 +136,37 @@ function styledParagraphs(element: Extract<SceneElement, { type: "text" }>, styl
   return element.paragraphs.map((paragraph) => ({ ...paragraph, runs: paragraph.runs.map((run) => ({ ...run, ...style })) }));
 }
 
+function vectorPathEditResult(slide: SlideDocument, element: Extract<SceneElement, { type: "shape" }>, pathData: VectorPathData, fitBounds: boolean): EditorCommandResult {
+  validateVectorPathData(pathData);
+  if (element.shape !== "custom") throw new Error(`Element ${element.id} is not an editable custom vector`);
+  if (!fitBounds) return {
+    operations: [{ op: "updateVectorPath", slideId: slide.id, elementId: element.id, pathData: structuredClone(pathData) }],
+    nextSelectionIds: [element.id],
+    affectedAutoLayoutContainerIds: [],
+  };
+  if ((element.geometry.rotation ?? 0) !== 0) throw new Error("Vector node fit-bounds editing for rotated vectors is not implemented yet");
+  if (!element.pathData) throw new Error(`Vector ${element.id} has no structured pathData to fit`);
+  const before = vectorPathBounds(element.pathData);
+  const after = vectorPathBounds(pathData);
+  const sx = element.geometry.width / Math.max(before.width, 0.000001);
+  const sy = element.geometry.height / Math.max(before.height, 0.000001);
+  const normalized = translateVectorPath(pathData, -after.left, -after.top);
+  const geometry: Partial<Geometry> = {
+    x: element.geometry.x + (after.left - before.left) * sx,
+    y: element.geometry.y + (after.top - before.top) * sy,
+    width: Math.max(0.01, after.width * sx),
+    height: Math.max(0.01, after.height * sy),
+  };
+  return {
+    operations: [
+      { op: "updateVectorPath", slideId: slide.id, elementId: element.id, pathData: normalized },
+      { op: "updateGeometry", slideId: slide.id, elementId: element.id, geometry },
+    ],
+    nextSelectionIds: [element.id],
+    affectedAutoLayoutContainerIds: layoutParentIds(slide, element.id),
+  };
+}
+
 function dispatch(slide: SlideDocument, input: Exclude<EditorCommandInput, { command: "copy" }>): EditorCommandResult {
   switch (input.command) {
     case "nudge": return nudgeSelection(slide, input.selectedIds, input.dx, input.dy);
@@ -175,9 +206,8 @@ function dispatch(slide: SlideDocument, input: Exclude<EditorCommandInput, { com
     }
     case "setVectorPath": {
       const element = elementById(slide, input.elementId);
-      if (element.type !== "shape" || element.shape !== "custom") throw new Error(`Element ${input.elementId} is not an editable custom vector`);
-      validateVectorPathData(input.pathData);
-      return { operations: [{ op: "updateVectorPath", slideId: slide.id, elementId: input.elementId, pathData: structuredClone(input.pathData) }], nextSelectionIds: [input.elementId], affectedAutoLayoutContainerIds: [] };
+      if (element.type !== "shape") throw new Error(`Element ${input.elementId} is not a vector shape`);
+      return vectorPathEditResult(slide, element, input.pathData, input.fitBounds ?? false);
     }
     case "setInspector": {
       const element = elementById(slide, input.elementId);
