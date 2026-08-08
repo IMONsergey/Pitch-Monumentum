@@ -6,7 +6,7 @@ import type { AutoLayoutSpec, DeckDocument } from "../../../packages/deck-model/
 import { applyDeckMutation, createMutation, deckHash, type DeckMutationOperation } from "../../../packages/mutations/src/index.js";
 import { setAutoLayoutMutationOperations, wrapSelectionInAutoLayoutOperations } from "../../../packages/auto-layout/src/index.js";
 import { runDeterministicQA } from "../../../packages/qa/src/index.js";
-import { compileDeckToPptx } from "../../../packages/pptx/src/index.js";
+import { exportProductionPptx } from "../../../packages/export-pipeline/src/index.js";
 import { VersionJournal } from "../../../packages/version-history/src/index.js";
 import { editorSpikeHtml, workspaceHtml } from "./ui.js";
 
@@ -126,8 +126,8 @@ export class PitchWorkspaceService {
     const dir = join(this.root, ".project", "exports");
     await mkdir(dir, { recursive: true });
     const path = join(dir, `${current.deck.id}-v${head.version}.pptx`);
-    const result = await compileDeckToPptx(current.deck, path);
-    return { path, result };
+    const manifest = await exportProductionPptx(current.deck, path, { assets: {} });
+    return { path, manifest };
   }
 }
 
