@@ -1,5 +1,8 @@
 type AnyRecord = Record<string, any>;
 
+const layoutDebug: AnyRecord = { invocations: 0, lastSelection: [], lastCreatedFrameId: null, lastError: null, lastAction: null };
+(window as any).__pitchAutoLayoutDebug = layoutDebug;
+
 const $ = <T extends Element = HTMLElement>(selector: string) => document.querySelector(selector) as T | null;
 
 async function api(path: string, options: RequestInit = {}): Promise<any> {
@@ -33,7 +36,9 @@ function status(text: string): void {
 }
 
 function installStyles(): void {
+  if (document.getElementById("pitch-layout-style")) return;
   const style = document.createElement("style");
+  style.id = "pitch-layout-style";
   style.textContent = `
     .pitch-layout-button{border:1px solid #313845;background:#171b21;color:#f3f5f7;padding:7px 10px;border-radius:8px;cursor:pointer}.pitch-layout-button:hover{border-color:#667085}
     .pitch-layout-panel{position:fixed;right:18px;top:70px;z-index:10020;width:270px;background:#111419f5;border:1px solid #313845;border-radius:12px;box-shadow:0 20px 60px #0009;color:#f3f5f7;padding:12px;display:none;backdrop-filter:blur(16px)}.pitch-layout-panel.visible{display:block}
@@ -99,41 +104,55 @@ function fillPanel(panel: HTMLElement, layout: AnyRecord): void {
 
 async function openOrWrap(): Promise<void> {
   if (document.querySelector("[data-pitch-text-editing=true]")) return;
+  layoutDebug.invocations += 1;
+  layoutDebug.lastError = null;
   const ids = selectedIds();
-  if (!ids.length) return status("Select a frame or at least two objects for Auto Layout");
-  const current = await project();
+  layoutDebug.lastSelection = [...ids];
+  try {
+    if (!ids.length) return status("Select a frame or at least two objects for Auto Layout");
+    const current = await project();
 
-  if (ids.length === 1) {
-    const found = findElement(current, ids[0]);
-    if (found && (found.element.type === "frame" || found.element.type === "group") && found.element.layout) {
-      const panel = installPanel();
-      panel.dataset.slideId = found.slide.id;
-      panel.dataset.elementId = found.element.id;
-      panel.dataset.deckHash = current.deckHash;
-      fillPanel(panel, found.element.layout);
-      panel.classList.add("visible");
-      return;
+    if (ids.length === 1) {
+      const found = findElement(current, ids[0]);
+      if (found && (found.element.type === "frame" || found.element.type === "group") && found.element.layout) {
+        const panel = installPanel();
+        panel.dataset.slideId = found.slide.id;
+        panel.dataset.elementId = found.element.id;
+        panel.dataset.deckHash = current.deckHash;
+        fillPanel(panel, found.element.layout);
+        panel.classList.add("visible");
+        layoutDebug.lastAction = "open-panel";
+        return;
+      }
+      return status("Select two or more objects to create Auto Layout");
     }
-    return status("Select two or more objects to create Auto Layout");
-  }
 
-  let slide: AnyRecord | null = null;
-  for (const candidate of current.deck.slides as AnyRecord[]) {
-    if (ids.every((id) => candidate.scene.some((element: AnyRecord) => element.id === id))) { slide = candidate; break; }
+    let slide: AnyRecord | null = null;
+    for (const candidate of current.deck.slides as AnyRecord[]) {
+      if (ids.every((id) => candidate.scene.some((element: AnyRecord) => element.id === id))) { slide = candidate; break; }
+    }
+    if (!slide) throw new Error("Selected objects must belong to one slide");
+    status(`Wrapping ${ids.length} objects in Auto Layout…`);
+    layoutDebug.lastAction = "wrap-request";
+    const result = await api("/api/wrap-auto-layout", {
+      method: "POST",
+      body: JSON.stringify({ slideId: slide.id, selectedIds: ids, direction: "horizontal", gapDU: 24, paddingDU: 24, expectedDeckHash: current.deckHash }),
+    });
+    layoutDebug.lastCreatedFrameId = result.createdFrameId;
+    layoutDebug.lastAction = "wrap-success";
+    (document.getElementById("spikeRefresh") as HTMLButtonElement | null)?.click();
+    const frameId = result.createdFrameId;
+    setTimeout(() => {
+      const frame = document.querySelector<HTMLElement>(`#spikeScene [data-id="${CSS.escape(frameId)}"]`);
+      frame?.click();
+      status(`Auto Layout frame created · ${frameId}`);
+    }, 500);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    layoutDebug.lastError = message;
+    layoutDebug.lastAction = "error";
+    status(`Auto Layout failed: ${message}`);
   }
-  if (!slide) throw new Error("Selected objects must belong to one slide");
-  status(`Wrapping ${ids.length} objects in Auto Layout…`);
-  const result = await api("/api/wrap-auto-layout", {
-    method: "POST",
-    body: JSON.stringify({ slideId: slide.id, selectedIds: ids, direction: "horizontal", gapDU: 24, paddingDU: 24, expectedDeckHash: current.deckHash }),
-  });
-  (document.getElementById("spikeRefresh") as HTMLButtonElement | null)?.click();
-  status(`Auto Layout frame created · ${result.createdFrameId}`);
-  const frameId = result.createdFrameId;
-  setTimeout(() => {
-    const frame = document.querySelector<HTMLElement>(`#spikeScene [data-id="${CSS.escape(frameId)}"]`);
-    frame?.click();
-  }, 350);
 }
 
 async function applyPanel(): Promise<void> {
@@ -141,18 +160,27 @@ async function applyPanel(): Promise<void> {
   const slideId = panel.dataset.slideId;
   const elementId = panel.dataset.elementId;
   if (!slideId || !elementId) return;
-  const current = await project();
-  const found = findElement(current, elementId);
-  if (!found) throw new Error(`Auto-layout frame disappeared: ${elementId}`);
-  const layout = layoutFromPanel(panel, found.element.layout);
-  status("Recalculating Auto Layout…");
-  await api("/api/auto-layout", {
-    method: "POST",
-    body: JSON.stringify({ slideId, elementId, layout, expectedDeckHash: current.deckHash }),
-  });
-  panel.classList.remove("visible");
-  (document.getElementById("spikeRefresh") as HTMLButtonElement | null)?.click();
-  status("Auto Layout committed through one deck mutation");
+  try {
+    const current = await project();
+    const found = findElement(current, elementId);
+    if (!found) throw new Error(`Auto-layout frame disappeared: ${elementId}`);
+    const layout = layoutFromPanel(panel, found.element.layout);
+    status("Recalculating Auto Layout…");
+    layoutDebug.lastAction = "apply-request";
+    await api("/api/auto-layout", {
+      method: "POST",
+      body: JSON.stringify({ slideId, elementId, layout, expectedDeckHash: current.deckHash }),
+    });
+    layoutDebug.lastAction = "apply-success";
+    panel.classList.remove("visible");
+    (document.getElementById("spikeRefresh") as HTMLButtonElement | null)?.click();
+    setTimeout(() => status("Auto Layout committed through one deck mutation"), 400);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    layoutDebug.lastError = message;
+    layoutDebug.lastAction = "error";
+    status(`Auto Layout failed: ${message}`);
+  }
 }
 
 export function installPitchAutoLayoutUI(): void {
@@ -172,7 +200,8 @@ export function installPitchAutoLayoutUI(): void {
   window.addEventListener("keydown", (event) => {
     if (event.key.toLowerCase() === "a" && event.shiftKey && !event.metaKey && !event.ctrlKey && !event.altKey && !document.querySelector("[data-pitch-text-editing=true]")) {
       event.preventDefault();
+      event.stopPropagation();
       void openOrWrap();
     }
-  });
+  }, true);
 }
