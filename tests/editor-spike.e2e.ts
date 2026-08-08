@@ -7,7 +7,7 @@ import { execFileSync } from "node:child_process";
 import { chromium } from "playwright";
 import { createWorkspaceServer } from "../apps/workspace/src/server.js";
 
-test("Daybrush editor spike commits a real drag into the canonical deck", async () => {
+test("Pitch editor commits a real browser drag into the canonical deck", async () => {
   const root = await mkdtemp(join(tmpdir(), "pitch-editor-e2e-"));
   execFileSync(process.execPath, ["dist/apps/cli/src/index.js", "demo", root], { stdio: "inherit" });
 
@@ -37,7 +37,7 @@ test("Daybrush editor spike commits a real drag into the canonical deck", async 
   try {
     const page = await browser.newPage({ viewport: { width: 1440, height: 960 } });
     await page.goto(`${base}/editor-spike`, { waitUntil: "networkidle" });
-    await page.getByText("Daybrush engine attached to live Pitch SceneGraph").waitFor();
+    await page.getByText("Pitch pointer engine + Daybrush controls attached to live SceneGraph").waitFor();
 
     const target = page.locator(`#spikeScene [data-id="${targetId}"]`);
     await target.click();
