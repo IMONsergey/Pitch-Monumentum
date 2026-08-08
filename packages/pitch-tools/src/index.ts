@@ -36,11 +36,12 @@ const selectionFields = {
 const expectedDeckHash = { type: "string" };
 const geometry = { type: "object", properties: { x: { type: "number" }, y: { type: "number" }, width: { type: "number", exclusiveMinimum: 0 }, height: { type: "number", exclusiveMinimum: 0 }, rotation: { type: "number" } }, required: ["x", "y", "width", "height"], additionalProperties: false };
 const crop = { type: "object", properties: { left: { type: "number", minimum: 0, maximum: .999999 }, top: { type: "number", minimum: 0, maximum: .999999 }, right: { type: "number", minimum: 0, maximum: .999999 }, bottom: { type: "number", minimum: 0, maximum: .999999 } }, required: ["left", "top", "right", "bottom"], additionalProperties: false };
+const componentTransform = { type: "object", properties: { x: { type: "number" }, y: { type: "number" }, scaleX: { type: "number", exclusiveMinimum: 0 }, scaleY: { type: "number", exclusiveMinimum: 0 } }, required: ["x", "y"], additionalProperties: false };
 
 export const PITCH_TOOL_DEFINITIONS: PitchToolDefinition[] = [
   {
     name: "pitch_project_state",
-    description: "Read current Pitch project state: active branch, deck hash, slide/object handles, QA, deck history, motion timeline/history, reusable components and project image assets.",
+    description: "Read current Pitch project state: active branch, deck hash, slide/object handles, QA, deck history, motion timeline/history, reusable component masters and linked instances, plus project image assets.",
     readOnly: true,
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
   },
@@ -113,12 +114,17 @@ export const PITCH_TOOL_DEFINITIONS: PitchToolDefinition[] = [
   },
   {
     name: "pitch_component_command",
-    description: "Create a reusable component from selected scene roots, insert a component instance with slot overrides, or detach an instance while preserving editable content.",
+    description: "Create and insert reusable component masters, update a master from a selected object tree with linked-instance propagation, sync all linked instances, reset one instance to its master, or detach it while preserving editable content.",
     readOnly: false,
     inputSchema: {
-      type: "object",
-      properties: { command: { enum: ["createFromSelection", "insert", "detach"] }, slideId: { type: "string" }, selectedIds: { type: "array", items: { type: "string" } }, name: { type: "string" }, componentId: { type: "string" }, description: { type: "string" }, transform: { type: "object", properties: { x: { type: "number" }, y: { type: "number" }, scaleX: { type: "number", exclusiveMinimum: 0 }, scaleY: { type: "number", exclusiveMinimum: 0 } }, required: ["x", "y"], additionalProperties: false }, overrides: { type: "array", items: { type: "object" } }, instanceId: { type: "string" }, expectedDeckHash },
-      required: ["command", "slideId"], additionalProperties: false,
+      oneOf: [
+        { type: "object", properties: { command: { const: "createFromSelection" }, slideId: { type: "string", minLength: 1 }, selectedIds: { type: "array", items: { type: "string", minLength: 1 }, minItems: 1 }, name: { type: "string", minLength: 1 }, componentId: { type: "string" }, description: { type: "string" }, expectedDeckHash }, required: ["command", "slideId", "selectedIds", "name"], additionalProperties: false },
+        { type: "object", properties: { command: { const: "insert" }, slideId: { type: "string", minLength: 1 }, componentId: { type: "string", minLength: 1 }, transform: componentTransform, overrides: { type: "array", items: { type: "object" } }, instanceId: { type: "string" }, expectedDeckHash }, required: ["command", "slideId", "componentId", "transform"], additionalProperties: false },
+        { type: "object", properties: { command: { const: "updateFromSelection" }, slideId: { type: "string", minLength: 1 }, selectedIds: { type: "array", items: { type: "string", minLength: 1 }, minItems: 1 }, componentId: { type: "string", minLength: 1 }, name: { type: "string" }, description: { type: "string" }, expectedDeckHash }, required: ["command", "slideId", "selectedIds", "componentId"], additionalProperties: false },
+        { type: "object", properties: { command: { const: "refreshInstances" }, componentId: { type: "string", minLength: 1 }, expectedDeckHash }, required: ["command", "componentId"], additionalProperties: false },
+        { type: "object", properties: { command: { const: "resetInstance" }, componentId: { type: "string", minLength: 1 }, instanceId: { type: "string", minLength: 1 }, expectedDeckHash }, required: ["command", "componentId", "instanceId"], additionalProperties: false },
+        { type: "object", properties: { command: { const: "detach" }, slideId: { type: "string", minLength: 1 }, instanceId: { type: "string", minLength: 1 }, expectedDeckHash }, required: ["command", "slideId", "instanceId"], additionalProperties: false }
+      ]
     },
   },
   { name: "pitch_undo", description: "Undo the most recent canonical deck version on the active Pitch branch.", readOnly: false, inputSchema: { type: "object", properties: {}, additionalProperties: false } },
@@ -146,7 +152,7 @@ export class PitchToolRuntime {
               id: state.deck?.id,
               title: state.deck?.title,
               canvas: state.deck?.canvas,
-              slides: (state.deck?.slides ?? []).map((slide: any) => ({ id: slide.id, order: slide.order, title: slide.title, archetype: slide.archetype, status: slide.status, purpose: slide.semantic?.purpose, takeaway: slide.semantic?.takeaway, elements: (slide.scene ?? []).map((element: any) => ({ id: element.id, name: element.name, type: element.type, semanticRole: element.semanticRole, geometry: element.geometry, locked: Boolean(element.locked), assetId: element.assetId, componentInstanceId: element.tags?.find((tag: string) => tag.startsWith("component:"))?.slice("component:".length) })) }))
+              slides: (state.deck?.slides ?? []).map((slide: any) => ({ id: slide.id, order: slide.order, title: slide.title, archetype: slide.archetype, status: slide.status, purpose: slide.semantic?.purpose, takeaway: slide.semantic?.takeaway, elements: (slide.scene ?? []).map((element: any) => ({ id: element.id, name: element.name, type: element.type, semanticRole: element.semanticRole, geometry: element.geometry, locked: Boolean(element.locked), assetId: element.assetId, componentInstanceId: element.tags?.find((tag: string) => tag.startsWith("component:"))?.slice("component:".length), componentId: element.tags?.find((tag: string) => tag.startsWith("component-def:"))?.slice("component-def:".length) })) }))
             },
             qa: state.qa,
             history: state.history,
@@ -154,6 +160,7 @@ export class PitchToolRuntime {
             motionHash: state.motionHash,
             motionHistory: state.motionHistory,
             components: state.components,
+            componentInstances: state.componentInstances,
             assets: state.assets,
           }
         };
