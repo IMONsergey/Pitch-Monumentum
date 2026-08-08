@@ -1,7 +1,8 @@
 import type { VectorPathData } from "../../../packages/deck-model/src/index.js";
-import { deleteVectorAnchor, splitVectorSegment } from "../../../packages/vector-path/src/edit.js";
+import { splitVectorSegment } from "../../../packages/vector-path/src/edit.js";
 import { nearestVectorSegment } from "../../../packages/vector-path/src/hit-test.js";
-import { moveVectorAnchor, moveVectorHandle, vectorAnchors, vectorPathBounds, vectorPathToSvg } from "../../../packages/vector-path/src/index.js";
+import { vectorPathBounds, vectorPathToSvg } from "../../../packages/vector-path/src/index.js";
+import { deleteEditableVectorAnchor, editableVectorAnchors, moveEditableVectorAnchor, moveEditableVectorHandle } from "../../../packages/vector-path/src/topology.js";
 
 type AnyRecord = Record<string, any>;
 type Runtime = {
@@ -136,7 +137,7 @@ function renderOverlay(): void {
   preview.setAttribute("transform", `matrix(${m.a} ${m.b} ${m.c} ${m.d} ${m.e} ${m.f})`);
   svg.appendChild(preview);
 
-  for (const anchor of vectorAnchors(workingPath)) {
+  for (const anchor of editableVectorAnchors(workingPath)) {
     const a = localToSlide(anchor.x, anchor.y);
     for (const [kind, handle] of [["in", anchor.inHandle], ["out", anchor.outHandle]] as const) {
       if (!handle) continue;
@@ -181,8 +182,8 @@ function onPointerMove(event: PointerEvent): void {
   const slidePoint = clientToSlide(event);
   const local = slideToLocal(slidePoint.x, slidePoint.y);
   workingPath = drag.kind === "anchor"
-    ? moveVectorAnchor(drag.original, drag.commandIndex, local.x, local.y, true)
-    : moveVectorHandle(drag.original, drag.commandIndex, drag.kind, local.x, local.y);
+    ? moveEditableVectorAnchor(drag.original, drag.commandIndex, local.x, local.y, true)
+    : moveEditableVectorHandle(drag.original, drag.commandIndex, drag.kind, local.x, local.y);
   previewPath(); renderOverlay();
 }
 
@@ -274,7 +275,7 @@ export function installPitchVectorNodeUI(): void {
     if ((event.key === "Delete" || event.key === "Backspace") && editingId && workingPath && selectedAnchor !== null) {
       event.preventDefault();
       try {
-        workingPath = deleteVectorAnchor(workingPath, selectedAnchor);
+        workingPath = deleteEditableVectorAnchor(workingPath, selectedAnchor);
         selectedAnchor = null;
         previewPath(); renderOverlay();
         void commitVectorPath("Delete vector point").catch(error => status(`Delete point failed: ${error instanceof Error ? error.message : String(error)}`));
