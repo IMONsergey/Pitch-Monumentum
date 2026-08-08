@@ -1,8 +1,9 @@
 {
   "name": "pitch-monumentum",
-  "version": "0.1.0",
+  "version": "0.2.0-preview.1",
   "private": true,
   "type": "module",
+  "main": "dist/apps/desktop/src/main.js",
   "description": "AI-native presentation development environment powered by PitchOS",
   "engines": {"node": ">=22"},
   "scripts": {
@@ -16,6 +17,8 @@
     "status": "npm run build && node dist/apps/cli/src/index.js status .pitch-demo",
     "serve": "npm run build && node dist/apps/demo/src/server.js .pitch-demo 4173",
     "workspace": "npm run build && node dist/apps/workspace/src/server.js .pitch-demo 4173",
+    "desktop": "npm run build && electron dist/apps/desktop/src/main.js",
+    "package:mac:x64": "npm run build && electron-builder --mac dmg --x64 --publish never",
     "pitch:mcp": "npm run build && node dist/apps/pitch-mcp/src/server.js .pitch-demo"
   },
   "dependencies": {
@@ -35,6 +38,8 @@
   },
   "devDependencies": {
     "@types/node": "^22.20.1",
+    "electron": "^37.2.6",
+    "electron-builder": "^26.0.12",
     "esbuild": "^0.25.0",
     "playwright": "^1.62.0",
     "typescript": "^5.8.3"

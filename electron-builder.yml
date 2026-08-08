@@ -1,0 +1,33 @@
+appId: agency.imon.pitchmonumentum
+productName: Pitch Monumentum
+artifactName: Pitch-Monumentum-${version}-${arch}.${ext}
+asar: false
+directories:
+  output: release
+files:
+  - dist/**/*
+  - apps/workspace/public/**/*
+  - package.json
+mac:
+  category: public.app-category.productivity
+  target:
+    - target: dmg
+      arch:
+        - x64
+  hardenedRuntime: false
+  gatekeeperAssess: false
+  identity: null
+dmg:
+  title: Pitch Monumentum
+  sign: false
+  window:
+    width: 660
+    height: 420
+  contents:
+    - x: 180
+      y: 210
+      type: file
+    - x: 480
+      y: 210
+      type: link
+      path: /Applications

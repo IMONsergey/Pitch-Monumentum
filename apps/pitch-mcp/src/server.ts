@@ -20,7 +20,7 @@ const textStyleSchema = z.object({ fontFamily: z.string().optional(), fontSizePt
 
 const editorCommandShape = {
   command: z.enum([
-    "nudge", "align", "distribute", "duplicate", "delete", "group", "ungroup", "arrange", "lock", "paste", "setInspector", "insertText", "insertShape", "insertFrame",
+    "nudge", "align", "distribute", "duplicate", "delete", "group", "ungroup", "arrange", "lock", "paste", "setInspector", "insertText", "insertShape", "insertFrame", "insertImage",
     "newSlide", "duplicateSlide", "deleteSlide", "moveSlide", "renameSlide",
   ]),
   slideId: z.string().min(1).optional(),
@@ -41,9 +41,66 @@ const editorCommandShape = {
   text: z.string().optional(),
   shape: z.enum(["rect", "roundRect", "ellipse", "triangle"]).optional(),
   fill: z.string().optional(),
+  assetId: z.string().optional(),
+  alt: z.string().optional(),
+  fit: z.enum(["cover", "contain", "stretch"]).optional(),
+  name: z.string().optional(),
   afterSlideId: z.string().optional(),
   toIndex: z.number().int().nonnegative().optional(),
   title: z.string().optional(),
+  expectedDeckHash: z.string().optional(),
+};
+
+const transitionSchema = z.object({
+  type: z.enum(["none", "fade", "push", "wipe", "dissolve"]),
+  durationMs: z.number().nonnegative(),
+  direction: z.enum(["left", "right", "up", "down"]).optional(),
+  advance: z.union([z.literal("manual"), z.object({ afterMs: z.number().nonnegative() })]).optional(),
+});
+const keyframeSchema = z.object({ timeMs: z.number().nonnegative(), value: z.number(), easing: z.any().optional() });
+const motionCommandShape = {
+  command: z.enum(["setSlideTransition", "addBuild", "updateBuild", "deleteBuild", "reorderBuild", "setTrack", "deleteTrack", "clearSlideMotion"]),
+  slideId: z.string().min(1),
+  transition: transitionSchema.nullable().optional(),
+  elementId: z.string().optional(),
+  elementIds: z.array(z.string().min(1)).optional(),
+  kind: z.enum(["entrance", "emphasis", "exit"]).optional(),
+  effect: z.enum(["appear", "fade", "scale", "slide", "wipe", "pulse"]).optional(),
+  trigger: z.enum(["onClick", "withPrevious", "afterPrevious"]).optional(),
+  durationMs: z.number().nonnegative().optional(),
+  delayMs: z.number().nonnegative().optional(),
+  direction: z.enum(["left", "right", "up", "down"]).optional(),
+  distanceDU: z.number().optional(),
+  easing: z.any().optional(),
+  buildId: z.string().optional(),
+  changes: z.any().optional(),
+  toIndex: z.number().int().nonnegative().optional(),
+  property: z.enum(["x", "y", "width", "height", "rotation", "opacity", "scaleX", "scaleY"]).optional(),
+  keyframes: z.array(keyframeSchema).optional(),
+  enabled: z.boolean().optional(),
+  trackId: z.string().optional(),
+  expectedDeckHash: z.string().optional(),
+  expectedMotionHash: z.string().optional(),
+};
+
+const cropSchema = z.object({ left: z.number().min(0).max(0.999999), top: z.number().min(0).max(0.999999), right: z.number().min(0).max(0.999999), bottom: z.number().min(0).max(0.999999) });
+const imageMediaPatchSchema = z.object({ fit: z.enum(["cover", "contain", "stretch"]).optional(), crop: cropSchema.nullable().optional(), assetId: z.string().optional(), alt: z.string().nullable().optional(), cornerRadiusDU: z.number().nonnegative().nullable().optional() });
+const mediaCommandShape = {
+  command: z.enum(["setImageProperties", "setImageFit", "setImageCrop", "replaceImageAsset", "setImageCornerRadius"]),
+  slideId: z.string().min(1), elementId: z.string().min(1),
+  fit: z.enum(["cover", "contain", "stretch"]).optional(), crop: cropSchema.nullable().optional(), assetId: z.string().optional(), alt: z.string().nullable().optional(), cornerRadiusDU: z.number().nonnegative().nullable().optional(), changes: imageMediaPatchSchema.optional(), expectedDeckHash: z.string().optional(),
+};
+
+const componentCommandShape = {
+  command: z.enum(["createFromSelection", "insert", "updateFromSelection", "refreshInstances", "resetInstance", "detach"]),
+  slideId: z.string().min(1).optional(),
+  selectedIds: z.array(z.string().min(1)).optional(),
+  name: z.string().optional(),
+  componentId: z.string().optional(),
+  description: z.string().optional(),
+  transform: z.object({ x: z.number(), y: z.number(), scaleX: z.number().positive().optional(), scaleY: z.number().positive().optional() }).optional(),
+  overrides: z.array(z.any()).optional(),
+  instanceId: z.string().optional(),
   expectedDeckHash: z.string().optional(),
 };
 
@@ -51,41 +108,64 @@ export function createPitchMcpServer(projectRoot: string): McpServer {
   const workspace = new PitchWorkspaceService(resolve(projectRoot));
   const runtime = new PitchToolRuntime(workspace);
   const server = new McpServer(
-    { name: "pitch-monumentum", version: "0.1.0" },
+    { name: "pitch-monumentum", version: "0.4.0" },
     {
       instructions: [
-        "Use pitch_project_state before meaningful edits to obtain current slide/object IDs and deckHash.",
-        "Use pitch_editor_command for professional scene and storyboard changes instead of inventing raw deck mutations.",
-        "Use setInspector when exact coordinates, dimensions, opacity, naming, locking, or whole-box typography are requested.",
-        "Use newSlide, duplicateSlide, deleteSlide, moveSlide, and renameSlide for storyboard lifecycle changes.",
-        "Preserve the user's requested scope. Prefer one atomic command at a time and re-read state when a command changes object or slide IDs or hierarchy.",
-        "Use pitch_undo immediately if a mutation produced an unintended result.",
+        "Use pitch_project_state before meaningful edits to obtain current slide/object IDs, deckHash, motionHash, component master/instance handles and project asset handles.",
+        "Use pitch_editor_command for canonical scene and storyboard edits instead of raw deck mutations. Use insertImage with an assetId already present in project state.",
+        "Use pitch_media_command for image fit, crop and asset replacement.",
+        "Use pitch_component_command for reusable component workflows: create/insert, updateFromSelection to update a master and propagate it, refreshInstances to resync linked instances, resetInstance to clear local slot overrides, or detach to break the link.",
+        "Use pitch_motion_command for transitions, build order and keyframe tracks. Motion history is independent: use pitch_motion_undo/pitch_motion_redo for animation mistakes.",
+        "Preserve requested scope. Prefer one coherent bounded command at a time and re-read state after operations that change IDs, hierarchy, slide order, component masters/instances, assets or motion history.",
+        "Use pitch_undo immediately if a deck mutation produced an unintended result.",
       ].join(" "),
     },
   );
 
   server.registerTool(
     "pitch_project_state",
-    { title: "Read Pitch project state", description: "Read active branch, deck hash, slide semantics, object handles, QA, and branch-local history without loading raw asset bytes.", inputSchema: {} },
+    { title: "Read Pitch project state", description: "Read active branch, deck hash, slide semantics, object handles, QA, motion timeline/history, reusable component masters and linked instances, project image assets and branch-local deck history.", inputSchema: {} },
     async () => mcpResult(await runtime.callTool("pitch_project_state")),
   );
-
   server.registerTool(
     "pitch_editor_command",
-    { title: "Execute Pitch editor command", description: "Execute an atomic professional object or storyboard command through the same engine as the Pitch UI. Auto Layout parents reflow automatically when needed, and slide commands create ordinary branch-local versions.", inputSchema: editorCommandShape },
+    { title: "Execute Pitch editor command", description: "Execute an atomic professional object or storyboard command through the same engine as the Pitch UI, including insertion of existing project image assets.", inputSchema: editorCommandShape },
     async (args) => mcpResult(await runtime.callTool("pitch_editor_command", args)),
   );
-
+  server.registerTool(
+    "pitch_motion_command",
+    { title: "Edit Pitch motion", description: "Edit transitions, click builds or exact keyframe tracks in the branch-local MotionDocument.", inputSchema: motionCommandShape },
+    async (args) => mcpResult(await runtime.callTool("pitch_motion_command", args)),
+  );
+  server.registerTool(
+    "pitch_media_command",
+    { title: "Edit Pitch image media", description: "Edit image fit, crop, corner radius or asset identity while preserving a fully editable image object.", inputSchema: mediaCommandShape },
+    async (args) => mcpResult(await runtime.callTool("pitch_media_command", args)),
+  );
+  server.registerTool(
+    "pitch_component_command",
+    { title: "Edit Pitch components", description: "Create/insert components, update masters with linked-instance propagation, resync instances, reset local overrides, or detach instances while preserving editable content.", inputSchema: componentCommandShape },
+    async (args) => mcpResult(await runtime.callTool("pitch_component_command", args)),
+  );
   server.registerTool(
     "pitch_undo",
     { title: "Undo Pitch edit", description: "Undo the most recent canonical deck version on the active branch.", inputSchema: {} },
     async () => mcpResult(await runtime.callTool("pitch_undo")),
   );
-
   server.registerTool(
     "pitch_redo",
     { title: "Redo Pitch edit", description: "Redo the next canonical deck version on the active branch.", inputSchema: {} },
     async () => mcpResult(await runtime.callTool("pitch_redo")),
+  );
+  server.registerTool(
+    "pitch_motion_undo",
+    { title: "Undo Pitch motion", description: "Undo the most recent MotionDocument version without touching deck edits.", inputSchema: {} },
+    async () => mcpResult(await runtime.callTool("pitch_motion_undo")),
+  );
+  server.registerTool(
+    "pitch_motion_redo",
+    { title: "Redo Pitch motion", description: "Redo the next MotionDocument version without touching deck edits.", inputSchema: {} },
+    async () => mcpResult(await runtime.callTool("pitch_motion_redo")),
   );
 
   return server;
