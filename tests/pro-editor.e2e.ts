@@ -11,7 +11,11 @@ async function project(base: string): Promise<any> {
   return fetch(`${base}/api/project`).then((response) => response.json());
 }
 
-test("Pro Editor keyboard, history, Layers, lock and structured clipboard mutate canonical project state", async () => {
+function deckHead(state: any): any {
+  return Object.values(state.manifest.branches[state.manifest.activeBranchId].heads).find((head: any) => head.kind === "deck");
+}
+
+test("Pro Editor keyboard, history, Inspector, Layers, lock and structured clipboard mutate canonical project state", async () => {
   const root = await mkdtemp(join(tmpdir(), "pitch-pro-editor-e2e-"));
   execFileSync(process.execPath, ["dist/apps/cli/src/index.js", "demo", root], { stdio: "inherit" });
   const { server } = createWorkspaceServer(root);
@@ -50,18 +54,32 @@ test("Pro Editor keyboard, history, Layers, lock and structured clipboard mutate
       return next.deck.slides[0].scene.find((element: any) => element.id === "body")?.geometry.x === x + 1;
     }, bodyBefore.geometry.x);
 
-    const afterNudge = await project(base);
-    const sceneCountAfterNudge = afterNudge.deck.slides[0].scene.length;
+    const beforeInspector = await project(base);
+    const beforeInspectorVersion = deckHead(beforeInspector).version;
+    await page.locator('[data-inspector="x"]').fill(String(bodyBefore.geometry.x + 21));
+    await page.locator('[data-inspector="fontSize"]').fill("31.5");
+    await page.locator('[data-inspector-action="apply"]').click();
+    await page.waitForFunction(async ({ x, size }) => {
+      const next = await fetch("/api/project").then((response) => response.json());
+      const body = next.deck.slides[0].scene.find((element: any) => element.id === "body");
+      const firstRun = body?.paragraphs?.[0]?.runs?.[0];
+      return body?.geometry?.x === x && firstRun?.fontSizePt === size;
+    }, { x: bodyBefore.geometry.x + 21, size: 31.5 });
+    const afterInspector = await project(base);
+    assert.equal(deckHead(afterInspector).version, beforeInspectorVersion + 1, "Inspector Apply must create exactly one version");
+
+    const sceneCountAfterInspector = afterInspector.deck.slides[0].scene.length;
     await page.keyboard.press("Control+D");
     await page.waitForFunction(async (count) => {
       const next = await fetch("/api/project").then((response) => response.json());
       return next.deck.slides[0].scene.length === count + 1;
-    }, sceneCountAfterNudge);
+    }, sceneCountAfterInspector);
 
     const afterDuplicate = await project(base);
     const duplicate = afterDuplicate.deck.slides[0].scene.find((element: any) => element.id.startsWith("body_copy_"));
     assert(duplicate, "Duplicate command must create a new stable element id");
-    assert.equal(duplicate.geometry.x, bodyBefore.geometry.x + 1 + 32);
+    assert.equal(duplicate.geometry.x, bodyBefore.geometry.x + 21 + 32);
+    assert.equal(duplicate.paragraphs[0].runs[0].fontSizePt, 31.5);
 
     await page.locator('[data-side-tab="layers"]').click();
     await page.locator(`#pitchLayers [data-layer-id="${duplicate.id}"]`).waitFor();
