@@ -6,6 +6,7 @@ import { installPitchInspectorUI } from "./inspector-ui.js";
 import { installPitchVisualStyleUI } from "./visual-style-ui.js";
 import { installPitchAppearanceUI } from "./appearance-ui.js";
 import { installPitchVectorUI } from "./vector-ui.js";
+import { installPitchVectorRenderer } from "./vector-render-ui.js";
 import { installPitchSlideUI } from "./slide-ui.js";
 import "./client.js";
 
@@ -17,4 +18,5 @@ installPitchInspectorUI();
 installPitchVisualStyleUI();
 installPitchAppearanceUI();
 installPitchVectorUI();
+installPitchVectorRenderer();
 installPitchSlideUI();
