@@ -1,11 +1,12 @@
 import { createHash } from "node:crypto";
 import { readFile, writeFile } from "node:fs/promises";
-import type { DeckDocument, ShapeElement } from "../../deck-model/src/index.js";
+import type { DeckDocument, Paint, ShapeElement } from "../../deck-model/src/index.js";
+import { effectiveFillPaint } from "../../appearance/src/index.js";
 import { compileDeckWithNativeCharts, type ChartCompileResult } from "../../pptx-charts/src/index.js";
 import type { RichAssetMap } from "../../pptx-rich/src/index.js";
 import { readZipMap, writeZipMap } from "../../source-ingest/src/zip.js";
 import { effectiveVectorSvgPath } from "../../vector-engine/src/index.js";
-import { vectorPathBounds } from "../../vector-engine/src/path-utils.js";
+import { vectorPathBounds } from "../../vector-path/src/index.js";
 
 const IMAGE_REL = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image";
 const REL_NS = "http://schemas.openxmlformats.org/package/2006/relationships";
@@ -52,11 +53,29 @@ function customPaths(deck: DeckDocument): CustomPathRef[] {
   return result;
 }
 
+function gradientVector(paint: Extract<Paint, { kind: "linearGradient" }>): { defs: string; fill: string } {
+  const angle = paint.angleDeg * Math.PI / 180;
+  const dx = Math.sin(angle);
+  const dy = -Math.cos(angle);
+  const stopXml = paint.stops.map((stop) => `<stop offset="${Math.max(0, Math.min(1, stop.position)) * 100}%" stop-color="${xml(stop.color)}" stop-opacity="${Math.max(0, Math.min(1, stop.opacity ?? 1))}"/>`).join("");
+  const id = "pitchGradient";
+  const defs = `<defs><linearGradient id="${id}" x1="${.5 - dx / 2}" y1="${.5 - dy / 2}" x2="${.5 + dx / 2}" y2="${.5 + dy / 2}">${stopXml}</linearGradient></defs>`;
+  return { defs, fill: `url(#${id})` };
+}
+
+function vectorFill(element: ShapeElement): { defs: string; fill: string; opacity?: number } {
+  const paint = effectiveFillPaint(element);
+  if (paint?.kind === "linearGradient") return gradientVector(paint);
+  if (paint?.kind === "solid") return { defs: "", fill: paint.color, opacity: paint.opacity ?? 1 };
+  if (paint?.kind === "none") return { defs: "", fill: "none" };
+  return { defs: "", fill: element.fill && element.fill.toLowerCase() !== "transparent" ? element.fill : "none" };
+}
+
 function svgFor(vector: CustomPathRef): string {
   const element = vector.element;
   const width = Math.max(0.01, element.geometry.width);
   const height = Math.max(0.01, element.geometry.height);
-  const fill = element.fill && element.fill.toLowerCase() !== "transparent" ? element.fill : "none";
+  const paint = vectorFill(element);
   const stroke = element.stroke?.color ?? "none";
   const strokeWidth = element.stroke?.widthDU ?? 0;
   const dash = element.stroke?.dash === "dash"
@@ -66,7 +85,7 @@ function svgFor(vector: CustomPathRef): string {
       : undefined;
   const box = vector.viewBox;
   const fillRule = element.pathData?.fillRule ?? "nonzero";
-  return `<?xml version="1.0" encoding="UTF-8"?>\n<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="${box.left} ${box.top} ${box.width} ${box.height}" preserveAspectRatio="none"><path d="${xml(vector.svgPath)}" fill="${xml(fill)}" fill-rule="${fillRule}" stroke="${xml(stroke)}" stroke-width="${strokeWidth}"${dash ? ` stroke-dasharray="${xml(dash)}"` : ""} vector-effect="non-scaling-stroke" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+  return `<?xml version="1.0" encoding="UTF-8"?>\n<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="${box.left} ${box.top} ${Math.max(.01, box.width)} ${Math.max(.01, box.height)}" preserveAspectRatio="none">${paint.defs}<path d="${xml(vector.svgPath)}" fill="${xml(paint.fill)}"${paint.opacity !== undefined ? ` fill-opacity="${paint.opacity}"` : ""} fill-rule="${fillRule}" stroke="${xml(stroke)}" stroke-width="${strokeWidth}"${dash ? ` stroke-dasharray="${xml(dash)}"` : ""} vector-effect="non-scaling-stroke" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
 }
 
 function nextRelationshipId(xmlText: string): string {
