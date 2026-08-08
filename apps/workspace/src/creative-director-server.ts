@@ -27,14 +27,15 @@ async function body(req: IncomingMessage, limit = 1024 * 1024): Promise<any> {
 }
 
 async function editorBundle(): Promise<string> {
-  const [editor, design, masters, director, preview] = await Promise.all([
+  const [editor, design, masters, director, preview, runs] = await Promise.all([
     readFile(resolve("apps", "workspace", "public", "editor-spike.js"), "utf8"),
     readFile(resolve("apps", "workspace", "public", "design-system-ui.js"), "utf8"),
     readFile(resolve("apps", "workspace", "public", "slide-masters-ui.js"), "utf8"),
     readFile(resolve("apps", "workspace", "public", "creative-director-ui.js"), "utf8"),
     readFile(resolve("apps", "workspace", "public", "creative-preview-ui.js"), "utf8"),
+    readFile(resolve("apps", "workspace", "public", "creative-runs-ui.js"), "utf8"),
   ]);
-  return `${editor}\n;/* Pitch Design System 2.0 */\n${design}\n;/* Pitch Slide Masters */\n${masters}\n;/* Pitch Creative Director */\n${director}\n;/* Pitch Creative Preview Review */\n${preview}\n`;
+  return `${editor}\n;/* Pitch Design System 2.0 */\n${design}\n;/* Pitch Slide Masters */\n${masters}\n;/* Pitch Creative Director */\n${director}\n;/* Pitch Creative Preview Review */\n${preview}\n;/* Pitch Creative Run Audits */\n${runs}\n`;
 }
 
 function compactReview(reviewed: Awaited<ReturnType<CreativeDirectorRuntime["review"]>>) {
