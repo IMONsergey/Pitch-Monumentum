@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, Menu, shell } from "electron";
+import { app, BrowserWindow, dialog, Menu, shell, type MessageBoxOptions, type OpenDialogOptions } from "electron";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
@@ -32,6 +32,15 @@ async function readDesktopState(): Promise<DesktopState> {
 async function writeDesktopState(state: DesktopState): Promise<void> {
   await mkdir(app.getPath("userData"), { recursive: true });
   await writeFile(statePath(), `${JSON.stringify(state, null, 2)}\n`, "utf8");
+}
+
+async function showMessage(options: MessageBoxOptions): Promise<void> {
+  if (mainWindow) await dialog.showMessageBox(mainWindow, options);
+  else await dialog.showMessageBox(options);
+}
+
+async function showOpenDialog(options: OpenDialogOptions) {
+  return mainWindow ? dialog.showOpenDialog(mainWindow, options) : dialog.showOpenDialog(options);
 }
 
 async function isPitchProject(root: string): Promise<boolean> {
@@ -80,7 +89,7 @@ async function switchProject(projectRoot: string): Promise<void> {
 }
 
 async function chooseProject(): Promise<void> {
-  const result = await dialog.showOpenDialog(mainWindow ?? undefined, {
+  const result = await showOpenDialog({
     title: "Open Pitch Monumentum Project",
     buttonLabel: "Open Project",
     properties: ["openDirectory"],
@@ -88,7 +97,7 @@ async function chooseProject(): Promise<void> {
   if (result.canceled || !result.filePaths[0]) return;
   const root = result.filePaths[0];
   if (!(await isPitchProject(root))) {
-    await dialog.showMessageBox(mainWindow ?? undefined, {
+    await showMessage({
       type: "warning",
       title: "Not a Pitch project",
       message: "This folder does not contain a Pitch Monumentum .project/manifest.json.",
@@ -116,7 +125,7 @@ async function exportPptx(): Promise<void> {
     const result = await workspaceService.exportPptx();
     shell.showItemInFolder(result.path);
   } catch (error) {
-    await dialog.showMessageBox(mainWindow ?? undefined, {
+    await showMessage({
       type: "error",
       title: "Export failed",
       message: error instanceof Error ? error.message : String(error),
@@ -184,9 +193,7 @@ function installMenu(): void {
         },
       ],
     },
-    {
-      role: "windowMenu",
-    },
+    { role: "windowMenu" },
     {
       label: "Help",
       submenu: [
@@ -234,8 +241,8 @@ async function createWindow(): Promise<void> {
 app.setName("Pitch Monumentum");
 
 app.whenReady().then(async () => {
-  // electron-builder preview is intentionally unpacked so the existing workspace static resolver
-  // can keep using repository-relative paths. Production packaging can move to ASAR later.
+  // The development preview is intentionally unpacked. This lets the existing workspace static
+  // resolver keep using repository-relative paths. Production packaging can move to ASAR later.
   try { process.chdir(app.getAppPath()); } catch {}
   await createWindow();
   app.on("activate", () => { if (BrowserWindow.getAllWindows().length === 0) void createWindow(); });
