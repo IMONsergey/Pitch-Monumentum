@@ -77,14 +77,26 @@ export function exchangeToVector(value: VectorExchangeV1, geometry: { x: number;
   };
 }
 
+function gradientPaintSvg(paint: Extract<Paint, { kind: "linearGradient" }>): { defs: string; fill: string } {
+  const angle = paint.angleDeg * Math.PI / 180;
+  const dx = Math.sin(angle);
+  const dy = -Math.cos(angle);
+  const stops = paint.stops.map((stop) => `<stop offset="${Math.max(0, Math.min(1, stop.position)) * 100}%" stop-color="${stop.color}" stop-opacity="${Math.max(0, Math.min(1, stop.opacity ?? 1))}"/>`).join("");
+  return {
+    defs: `<defs><linearGradient id="pitchGradient" x1="${.5 - dx / 2}" y1="${.5 - dy / 2}" x2="${.5 + dx / 2}" y2="${.5 + dy / 2}">${stops}</linearGradient></defs>`,
+    fill: "url(#pitchGradient)",
+  };
+}
+
 export function vectorExchangeToSvg(value: VectorExchangeV1): string {
   validateVectorExchange(value);
   const bounds = vectorPathBounds(value.pathData);
-  const fill = value.fillPaint?.kind === "solid"
+  const gradient = value.fillPaint?.kind === "linearGradient" ? gradientPaintSvg(value.fillPaint) : undefined;
+  const fill = gradient?.fill ?? (value.fillPaint?.kind === "solid"
     ? value.fillPaint.color
     : value.fillPaint?.kind === "none"
       ? "none"
-      : value.legacyFill && value.legacyFill !== "transparent" ? value.legacyFill : "none";
+      : value.legacyFill && value.legacyFill !== "transparent" ? value.legacyFill : "none");
   const fillOpacity = value.fillPaint?.kind === "solid" ? value.fillPaint.opacity ?? 1 : 1;
   const stroke = value.stroke?.color ?? "none";
   const strokeWidth = value.stroke?.widthDU ?? 0;
@@ -93,5 +105,5 @@ export function vectorExchangeToSvg(value: VectorExchangeV1): string {
     : value.stroke?.dash === "dot"
       ? `${Math.max(1, strokeWidth)} ${Math.max(1, strokeWidth * 1.5)}`
       : undefined;
-  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${bounds.left} ${bounds.top} ${Math.max(.01, bounds.width)} ${Math.max(.01, bounds.height)}"><path d="${vectorPathToSvg(value.pathData)}" fill="${fill}" fill-opacity="${fillOpacity}" stroke="${stroke}" stroke-width="${strokeWidth}"${dash ? ` stroke-dasharray="${dash}"` : ""} stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${bounds.left} ${bounds.top} ${Math.max(.01, bounds.width)} ${Math.max(.01, bounds.height)}">${gradient?.defs ?? ""}<path d="${vectorPathToSvg(value.pathData)}" fill="${fill}"${value.fillPaint?.kind === "solid" ? ` fill-opacity="${fillOpacity}"` : ""} fill-rule="${value.pathData.fillRule}" stroke="${stroke}" stroke-width="${strokeWidth}"${dash ? ` stroke-dasharray="${dash}"` : ""} stroke-linecap="round" stroke-linejoin="round"/></svg>`;
 }
