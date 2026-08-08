@@ -3,6 +3,7 @@ import { dirname } from "node:path";
 import type { ChartElement, DeckDocument } from "../../deck-model/src/index.js";
 import { dataStoryQuality } from "../../data-storytelling/src/index.js";
 import { compileDeckWithAppearance } from "../../pptx-appearance/src/index.js";
+import { validatePptxAppearance } from "../../pptx-appearance-qa/src/index.js";
 import type { RichAsset } from "../../pptx-rich/src/index.js";
 import { validatePptxRoundTrip, type RoundTripIssue } from "../../pptx-roundtrip/src/index.js";
 import { runDeterministicQA, type QAIssue } from "../../qa/src/index.js";
@@ -208,14 +209,19 @@ export async function exportProductionPptx(deck: DeckDocument, outputPath: strin
   const finalElementResults = normalizeCompileResults(deck, compiled.elementResults);
   const editability = strategyCounts(finalElementResults);
   const unsupportedElementIds = finalElementResults.filter((item) => item.strategy === "unsupported").map((item) => item.elementId);
-  const roundTrip = await validatePptxRoundTrip(deck, outputPath);
-  const blockingRoundTrip = roundTrip.issues.filter((issue) => issue.severity === "critical");
+  const structuralRoundTrip = await validatePptxRoundTrip(deck, outputPath);
+  const appearanceRoundTrip = await validatePptxAppearance(deck, outputPath);
+  const roundTripIssues = [...structuralRoundTrip.issues, ...appearanceRoundTrip];
+  const blockingRoundTrip = roundTripIssues.filter((issue) => issue.severity === "critical");
   const ready = blockingPreflight.length === 0 && blockingRoundTrip.length === 0 && unsupportedElementIds.length === 0;
   const warnings = [
     ...preflightIssues
       .filter((issue) => issue.severity === "minor" || issue.severity === "major")
       .map((issue) => `${issue.elementId ?? issue.slideId ?? "deck"}: ${issue.message}`),
     ...compiled.warnings,
+    ...roundTripIssues
+      .filter((issue) => issue.severity !== "critical")
+      .map((issue) => `${issue.elementId ?? issue.slideId ?? "deck"}: ${issue.message}`),
     ...finalElementResults.flatMap((item) => item.warnings.map((warning) => `${item.elementId}: ${warning}`)),
   ];
 
@@ -230,7 +236,7 @@ export async function exportProductionPptx(deck: DeckDocument, outputPath: strin
     allowDraft,
     editability,
     preflightIssues,
-    roundTripIssues: roundTrip.issues,
+    roundTripIssues,
     unsupportedElementIds,
     warnings: [...new Set(warnings)],
   };
