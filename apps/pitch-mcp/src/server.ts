@@ -20,7 +20,7 @@ const textStyleSchema = z.object({ fontFamily: z.string().optional(), fontSizePt
 
 const editorCommandShape = {
   command: z.enum([
-    "nudge", "align", "distribute", "duplicate", "delete", "group", "ungroup", "arrange", "lock", "paste", "setInspector", "insertText", "insertShape", "insertFrame",
+    "nudge", "align", "distribute", "duplicate", "delete", "group", "ungroup", "arrange", "lock", "paste", "setInspector", "insertText", "insertShape", "insertFrame", "insertImage",
     "newSlide", "duplicateSlide", "deleteSlide", "moveSlide", "renameSlide",
   ]),
   slideId: z.string().min(1).optional(),
@@ -41,6 +41,10 @@ const editorCommandShape = {
   text: z.string().optional(),
   shape: z.enum(["rect", "roundRect", "ellipse", "triangle"]).optional(),
   fill: z.string().optional(),
+  assetId: z.string().optional(),
+  alt: z.string().optional(),
+  fit: z.enum(["cover", "contain", "stretch"]).optional(),
+  name: z.string().optional(),
   afterSlideId: z.string().optional(),
   toIndex: z.number().int().nonnegative().optional(),
   title: z.string().optional(),
@@ -80,10 +84,11 @@ const motionCommandShape = {
 };
 
 const cropSchema = z.object({ left: z.number().min(0).max(0.999999), top: z.number().min(0).max(0.999999), right: z.number().min(0).max(0.999999), bottom: z.number().min(0).max(0.999999) });
+const imageMediaPatchSchema = z.object({ fit: z.enum(["cover", "contain", "stretch"]).optional(), crop: cropSchema.nullable().optional(), assetId: z.string().optional(), alt: z.string().nullable().optional(), cornerRadiusDU: z.number().nonnegative().nullable().optional() });
 const mediaCommandShape = {
-  command: z.enum(["setImageFit", "setImageCrop", "replaceImageAsset", "setImageCornerRadius"]),
+  command: z.enum(["setImageProperties", "setImageFit", "setImageCrop", "replaceImageAsset", "setImageCornerRadius"]),
   slideId: z.string().min(1), elementId: z.string().min(1),
-  fit: z.enum(["cover", "contain", "stretch"]).optional(), crop: cropSchema.nullable().optional(), assetId: z.string().optional(), alt: z.string().nullable().optional(), cornerRadiusDU: z.number().nonnegative().nullable().optional(), expectedDeckHash: z.string().optional(),
+  fit: z.enum(["cover", "contain", "stretch"]).optional(), crop: cropSchema.nullable().optional(), assetId: z.string().optional(), alt: z.string().nullable().optional(), cornerRadiusDU: z.number().nonnegative().nullable().optional(), changes: imageMediaPatchSchema.optional(), expectedDeckHash: z.string().optional(),
 };
 
 const componentCommandShape = {
@@ -96,14 +101,14 @@ export function createPitchMcpServer(projectRoot: string): McpServer {
   const workspace = new PitchWorkspaceService(resolve(projectRoot));
   const runtime = new PitchToolRuntime(workspace);
   const server = new McpServer(
-    { name: "pitch-monumentum", version: "0.2.0" },
+    { name: "pitch-monumentum", version: "0.3.0" },
     {
       instructions: [
-        "Use pitch_project_state before meaningful edits to obtain current slide/object IDs, deckHash, motionHash and component handles.",
-        "Use pitch_editor_command for canonical scene and storyboard edits instead of raw deck mutations.",
+        "Use pitch_project_state before meaningful edits to obtain current slide/object IDs, deckHash, motionHash, component handles and project asset handles.",
+        "Use pitch_editor_command for canonical scene and storyboard edits instead of raw deck mutations. Use insertImage with an assetId already present in project state.",
         "Use pitch_media_command for image fit, crop and asset replacement; use pitch_component_command for reusable component workflows.",
         "Use pitch_motion_command for transitions, build order and keyframe tracks. Motion history is independent: use pitch_motion_undo/pitch_motion_redo for animation mistakes.",
-        "Preserve requested scope. Prefer one coherent bounded command at a time and re-read state after operations that change IDs, hierarchy, slide order, component instances or motion history.",
+        "Preserve requested scope. Prefer one coherent bounded command at a time and re-read state after operations that change IDs, hierarchy, slide order, component instances, assets or motion history.",
         "Use pitch_undo immediately if a deck mutation produced an unintended result.",
       ].join(" "),
     },
@@ -111,12 +116,12 @@ export function createPitchMcpServer(projectRoot: string): McpServer {
 
   server.registerTool(
     "pitch_project_state",
-    { title: "Read Pitch project state", description: "Read active branch, deck hash, slide semantics, object handles, QA, motion timeline/history, reusable components and branch-local deck history.", inputSchema: {} },
+    { title: "Read Pitch project state", description: "Read active branch, deck hash, slide semantics, object handles, QA, motion timeline/history, reusable components, project image assets and branch-local deck history.", inputSchema: {} },
     async () => mcpResult(await runtime.callTool("pitch_project_state")),
   );
   server.registerTool(
     "pitch_editor_command",
-    { title: "Execute Pitch editor command", description: "Execute an atomic professional object or storyboard command through the same engine as the Pitch UI.", inputSchema: editorCommandShape },
+    { title: "Execute Pitch editor command", description: "Execute an atomic professional object or storyboard command through the same engine as the Pitch UI, including insertion of existing project image assets.", inputSchema: editorCommandShape },
     async (args) => mcpResult(await runtime.callTool("pitch_editor_command", args)),
   );
   server.registerTool(
