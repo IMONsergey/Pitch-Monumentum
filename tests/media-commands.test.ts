@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import type { DeckDocument, ImageElement } from "../packages/deck-model/src/index.js";
-import { executeMediaCommand, validateImageCrop } from "../packages/media-commands/src/index.js";
+import { executeMediaCommand, validateImageCrop, validateImageFocalPoint } from "../packages/media-commands/src/index.js";
 
 function fixture(): DeckDocument {
   const image: ImageElement = {
@@ -22,23 +22,47 @@ function image(deck: DeckDocument): ImageElement {
   return deck.slides[0].scene[0] as ImageElement;
 }
 
-test("media commands edit crop, fit, radius and asset without mutating input", () => {
+test("media commands edit crop, fit, focal, clip, radius and asset without mutating input", () => {
   const original = fixture();
   let result = executeMediaCommand(original, { command: "setImageCrop", slideId: "slide_1", elementId: "image_1", crop: { left: .1, top: .05, right: .15, bottom: .1 } });
   assert.deepEqual(image(result.deck).crop, { left: .1, top: .05, right: .15, bottom: .1 });
   assert.equal(image(original).crop, undefined);
 
+  result = executeMediaCommand(result.deck, { command: "setImageFocalPoint", slideId: "slide_1", elementId: "image_1", focalPoint: { x: .72, y: .31 } });
+  result = executeMediaCommand(result.deck, { command: "setImageClipShape", slideId: "slide_1", elementId: "image_1", clipShape: "ellipse" });
   result = executeMediaCommand(result.deck, { command: "setImageFit", slideId: "slide_1", elementId: "image_1", fit: "contain" });
   result = executeMediaCommand(result.deck, { command: "setImageCornerRadius", slideId: "slide_1", elementId: "image_1", cornerRadiusDU: 32 });
   result = executeMediaCommand(result.deck, { command: "replaceImageAsset", slideId: "slide_1", elementId: "image_1", assetId: "asset_b", alt: "Replacement" });
   assert.equal(image(result.deck).fit, "contain");
+  assert.deepEqual(image(result.deck).focalPoint, { x: .72, y: .31 });
+  assert.equal(image(result.deck).clipShape, "ellipse");
   assert.equal(image(result.deck).cornerRadiusDU, 32);
   assert.equal(image(result.deck).assetId, "asset_b");
   assert.equal(image(result.deck).alt, "Replacement");
   assert.equal(result.deck.slides[0].status, "draft");
 });
 
-test("crop validation rejects invisible and invalid crops", () => {
+test("atomic image properties can update and reset focal/crop/clip in one version", () => {
+  const result = executeMediaCommand(fixture(), {
+    command: "setImageProperties", slideId: "slide_1", elementId: "image_1",
+    changes: { crop: { left: .1, top: .1, right: .1, bottom: .1 }, focalPoint: { x: .8, y: .4 }, clipShape: "roundRect", cornerRadiusDU: 48 },
+  });
+  assert.deepEqual(image(result.deck).crop, { left: .1, top: .1, right: .1, bottom: .1 });
+  assert.deepEqual(image(result.deck).focalPoint, { x: .8, y: .4 });
+  assert.equal(image(result.deck).clipShape, "roundRect");
+  assert.equal(image(result.deck).cornerRadiusDU, 48);
+
+  const reset = executeMediaCommand(result.deck, {
+    command: "setImageProperties", slideId: "slide_1", elementId: "image_1", changes: { crop: null, focalPoint: null, clipShape: null },
+  });
+  assert.equal(image(reset.deck).crop, undefined);
+  assert.equal(image(reset.deck).focalPoint, undefined);
+  assert.equal(image(reset.deck).clipShape, undefined);
+});
+
+test("crop and focal validation reject invisible or invalid source windows", () => {
   assert.throws(() => validateImageCrop({ left: .6, right: .5, top: 0, bottom: 0 }), /visible width/);
   assert.throws(() => validateImageCrop({ left: -.1, right: 0, top: 0, bottom: 0 }), /between 0/);
+  assert.throws(() => validateImageFocalPoint({ x: 1.1, y: .5 }), /x must be between/);
+  assert.throws(() => validateImageFocalPoint({ x: .5, y: -.01 }), /y must be between/);
 });
