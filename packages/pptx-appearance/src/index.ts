@@ -1,11 +1,12 @@
 import { createHash } from "node:crypto";
 import { readFile, writeFile } from "node:fs/promises";
-import type { DeckDocument, Paint, SceneElement, VisualEffect } from "../../deck-model/src/index.js";
+import type { DeckDocument, FrameElement, Paint, SceneElement, VisualEffect } from "../../deck-model/src/index.js";
 import { compileDeckWithVectors } from "../../pptx-vector/src/index.js";
 import type { RichAssetMap } from "../../pptx-rich/src/index.js";
 import { readZipMap, writeZipMap } from "../../source-ingest/src/zip.js";
 
 const EMU_PER_DU = 914400 / 144;
+const FRAME_PROMOTION_FILL = "#FFFFFF";
 
 function hex(color: string): string {
   const normalized = color.replace(/^#/, "").toUpperCase();
@@ -23,8 +24,8 @@ function paintXml(paint: Paint): string {
     return `<a:solidFill><a:srgbClr val="${hex(paint.color)}">${opacity < 1 ? `<a:alpha val="${alpha(opacity)}"/>` : ""}</a:srgbClr></a:solidFill>`;
   }
   const stops = paint.stops.map((stop) => `<a:gs pos="${Math.round(Math.max(0, Math.min(1, stop.position)) * 100000)}"><a:srgbClr val="${hex(stop.color)}">${(stop.opacity ?? 1) < 1 ? `<a:alpha val="${alpha(stop.opacity ?? 1)}"/>` : ""}</a:srgbClr></a:gs>`).join("");
-  // Pitch uses CSS-like gradient angles (0° up, 90° right). DrawingML uses
-  // clockwise angle whose 0° gradient vector points right.
+  // Pitch uses CSS-like angles (0° up, 90° right). DrawingML's 0° vector
+  // points right and rotates clockwise, hence the -90° conversion.
   const drawingAngle = ((paint.angleDeg - 90) % 360 + 360) % 360;
   return `<a:gradFill rotWithShape="1"><a:gsLst>${stops}</a:gsLst><a:lin ang="${Math.round(drawingAngle * 60000)}" scaled="1"/></a:gradFill>`;
 }
@@ -75,10 +76,48 @@ function mutateBlocks(source: string, regex: RegExp, mutator: (block: string, in
   return output;
 }
 
+function appearanceMakesFrameVisual(frame: FrameElement): boolean {
+  return Boolean(
+    frame.fill
+    || frame.stroke
+    || (frame.fillPaint && frame.fillPaint.kind !== "none")
+    || firstShadow(frame.effects),
+  );
+}
+
+function appearanceOnlyFrame(frame: FrameElement): boolean {
+  return !frame.fill && !frame.stroke && appearanceMakesFrameVisual(frame);
+}
+
+/**
+ * The legacy rich compiler decides whether a frame is visual using legacy fill/stroke.
+ * Promote appearance-only frames in a compile-only clone so they get a native p:sp at
+ * their real z-index. The marker is replaced by canonical Paint in the appearance pass.
+ */
+function prepareDeckForAppearanceCompile(deck: DeckDocument): DeckDocument {
+  const prepared = structuredClone(deck);
+  for (const slide of prepared.slides) {
+    for (const element of slide.scene) {
+      if (element.type === "frame" && appearanceOnlyFrame(element)) element.fill = FRAME_PROMOTION_FILL;
+    }
+  }
+  return prepared;
+}
+
+function framePaintForExport(frame: FrameElement): Paint | undefined {
+  if (frame.fillPaint) return frame.fillPaint;
+  if (appearanceOnlyFrame(frame)) return { kind: "none" };
+  return undefined;
+}
+
 function shapeTargets(slide: DeckDocument["slides"][number]): SceneElement[] {
   return [...slide.scene]
     .sort((a, b) => a.zIndex - b.zIndex)
-    .filter((element) => (element.type === "shape" && element.shape !== "custom") || (element.type === "frame" && Boolean(element.fill || element.stroke || element.fillPaint)));
+    .filter((element) => (
+      element.type === "shape" && element.shape !== "custom"
+    ) || (
+      element.type === "frame" && appearanceMakesFrameVisual(element)
+    ));
 }
 
 function textTargets(slide: DeckDocument["slides"][number]): SceneElement[] {
@@ -105,7 +144,11 @@ function applySlideAppearance(slideXml: string, slide: DeckDocument["slides"][nu
     const isText = /<p:txBody(?:\s|>)/.test(block);
     const element = isText ? texts[textIndex++] : shapes[shapeIndex++];
     if (!element) return block;
-    const paint = element.type === "shape" || element.type === "frame" ? element.fillPaint : undefined;
+    const paint = element.type === "shape"
+      ? element.fillPaint
+      : element.type === "frame"
+        ? framePaintForExport(element)
+        : undefined;
     return mutateSpPr(block, paint, element.effects);
   });
 
@@ -140,16 +183,14 @@ function appearanceWarnings(deck: DeckDocument): AppearanceCompileWarning[] {
       if (element.type === "shape" && element.shape === "custom" && (element.fillPaint || element.effects?.length)) {
         warnings.push({ elementId: element.id, message: "Appearance on custom SVG vector is not injected after SVG vector conversion yet" });
       }
-      if (element.type === "frame" && (element.fillPaint || element.effects?.length) && !element.fill && !element.stroke) {
-        warnings.push({ elementId: element.id, message: "Appearance-only frame is structural in the current rich PPTX pass; add a legacy fill/stroke or wait for native appearance-frame emission" });
-      }
     }
   }
   return warnings;
 }
 
 export async function compileDeckWithAppearance(deck: DeckDocument, outputPath: string, assets: RichAssetMap = {}) {
-  const compiled = await compileDeckWithVectors(deck, outputPath, assets);
+  const prepared = prepareDeckForAppearanceCompile(deck);
+  const compiled = await compileDeckWithVectors(prepared, outputPath, assets);
   const entries = readZipMap(await readFile(outputPath));
   for (let index = 0; index < deck.slides.length; index += 1) {
     const path = `ppt/slides/slide${index + 1}.xml`;
