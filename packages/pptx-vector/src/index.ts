@@ -3,7 +3,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import type { DeckDocument, ShapeElement } from "../../deck-model/src/index.js";
 import { compileDeckWithNativeCharts, type ChartCompileResult } from "../../pptx-charts/src/index.js";
 import type { RichAssetMap } from "../../pptx-rich/src/index.js";
-import { unzip, zipStore } from "../../source-ingest/src/index.js";
+import { readZipMap, writeZipMap } from "../../source-ingest/src/zip.js";
 
 const IMAGE_REL = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image";
 const REL_NS = "http://schemas.openxmlformats.org/package/2006/relationships";
@@ -44,7 +44,11 @@ function svgFor(element: ShapeElement): string {
   const fill = element.fill && element.fill.toLowerCase() !== "transparent" ? element.fill : "none";
   const stroke = element.stroke?.color ?? "none";
   const strokeWidth = element.stroke?.widthDU ?? 0;
-  const dash = element.stroke?.dash === "dash" ? `${Math.max(1, strokeWidth * 4)} ${Math.max(1, strokeWidth * 2)}` : element.stroke?.dash === "dot" ? `${Math.max(1, strokeWidth)} ${Math.max(1, strokeWidth * 1.5)}` : undefined;
+  const dash = element.stroke?.dash === "dash"
+    ? `${Math.max(1, strokeWidth * 4)} ${Math.max(1, strokeWidth * 2)}`
+    : element.stroke?.dash === "dot"
+      ? `${Math.max(1, strokeWidth)} ${Math.max(1, strokeWidth * 1.5)}`
+      : undefined;
   return `<?xml version="1.0" encoding="UTF-8"?>\n<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}"><path d="${xml(element.svgPath)}" fill="${xml(fill)}" stroke="${xml(stroke)}" stroke-width="${strokeWidth}"${dash ? ` stroke-dasharray="${xml(dash)}"` : ""} stroke-linecap="round" stroke-linejoin="round"/></svg>`;
 }
 
@@ -55,7 +59,9 @@ function nextRelationshipId(xmlText: string): string {
 
 function addRelationship(existing: Buffer | undefined, relationshipId: string, target: string): Buffer {
   const relation = `<Relationship Id="${relationshipId}" Type="${IMAGE_REL}" Target="${xml(target)}"/>`;
-  if (!existing) return Buffer.from(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="${REL_NS}">${relation}</Relationships>`, "utf8");
+  if (!existing) {
+    return Buffer.from(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="${REL_NS}">${relation}</Relationships>`, "utf8");
+  }
   const source = existing.toString("utf8");
   return Buffer.from(source.replace("</Relationships>", `${relation}</Relationships>`), "utf8");
 }
@@ -106,7 +112,7 @@ export async function compileDeckWithVectors(deck: DeckDocument, outputPath: str
   }
 
   const compiled = await compileDeckWithNativeCharts(marked, outputPath, assets);
-  const entries = unzip(await readFile(outputPath));
+  const entries = readZipMap(await readFile(outputPath));
   ensureSvgContentType(entries);
   let mediaIndex = nextMediaIndex(entries);
 
@@ -117,15 +123,14 @@ export async function compileDeckWithVectors(deck: DeckDocument, outputPath: str
     const slideSource = entries.get(slidePath)?.toString("utf8");
     if (!slideSource) throw new Error(`Missing ${slidePath}`);
     const existingRels = entries.get(relsPath);
-    const relText = existingRels?.toString("utf8") ?? "";
-    const relationshipId = nextRelationshipId(relText);
+    const relationshipId = nextRelationshipId(existingRels?.toString("utf8") ?? "");
     const mediaName = `image${mediaIndex++}.svg`;
     entries.set(`ppt/media/${mediaName}`, Buffer.from(svgFor(vector.element), "utf8"));
     entries.set(relsPath, addRelationship(existingRels, relationshipId, `../media/${mediaName}`));
     entries.set(slidePath, Buffer.from(replaceMarkerShape(slideSource, vector.marker, (objectId) => pictureXml(vector.element, relationshipId, objectId)), "utf8"));
   }
 
-  const buffer = zipStore(entries);
+  const buffer = writeZipMap(entries);
   await writeFile(outputPath, buffer);
   const vectorIds = new Set(vectors.map((vector) => vector.element.id));
   const elementResults = compiled.elementResults.map((result) => vectorIds.has(result.elementId)
@@ -140,6 +145,6 @@ export async function compileDeckWithVectors(deck: DeckDocument, outputPath: str
     outputPath,
     elementResults,
     warnings,
-    outputHash: createHash("sha256").update(buffer).digest("hex"),
+    contentHash: createHash("sha256").update(buffer).digest("hex"),
   };
 }
