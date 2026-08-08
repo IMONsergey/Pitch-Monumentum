@@ -194,7 +194,7 @@ export class ProjectAssetStore {
     for (const id of ids) {
       try {
         const { metadata, path } = await this.content(id);
-        result[id] = { path, mimeType: metadata.mimeType };
+        result[id] = { path, mimeType: metadata.mimeType, width: metadata.width, height: metadata.height };
       } catch (error) {
         throw new Error(`Deck references missing or unreadable image asset ${id}: ${error instanceof Error ? error.message : String(error)}`);
       }
