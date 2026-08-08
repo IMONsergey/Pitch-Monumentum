@@ -12,7 +12,16 @@ async function demoRoot(prefix: string): Promise<string> {
   return root;
 }
 
-test("Workspace Codex tool creates a canonical deck artifact produced by codex", async () => {
+async function assertLatestDeckProducedByCodex(service: PitchWorkspaceService): Promise<void> {
+  const manifest = await service.store.readManifest();
+  const branch = manifest.branches[manifest.activeBranchId];
+  const deckHead = Object.values(branch.heads).find((head) => head.kind === "deck");
+  assert(deckHead);
+  const artifact = await service.store.read(deckHead.id, deckHead.version);
+  assert.equal(artifact.producer.type, "codex");
+}
+
+test("Workspace Codex editor tool creates a canonical deck artifact produced by codex", async () => {
   const root = await demoRoot("pitch-codex-workspace-");
   try {
     const service = new PitchWorkspaceService(root);
@@ -31,19 +40,62 @@ test("Workspace Codex tool creates a canonical deck artifact produced by codex",
     assert.equal(moved.geometry.x, target.geometry.x + 24);
     assert.notEqual(result.deckHash, before.deckHash);
     assert.deepEqual(result.nextSelectionIds, [target.id]);
-
-    const manifest = await service.store.readManifest();
-    const branch = manifest.branches[manifest.activeBranchId];
-    const deckHead = Object.values(branch.heads).find((head) => head.kind === "deck");
-    assert(deckHead);
-    const artifact = await service.store.read(deckHead.id, deckHead.version);
-    assert.equal(artifact.producer.type, "codex");
+    await assertLatestDeckProducedByCodex(service);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
 });
 
-test("Workspace exposes the bounded Codex tool registry over HTTP", async () => {
+test("Workspace strict Codex appearance tool writes gradient and shadow with codex provenance", async () => {
+  const root = await demoRoot("pitch-codex-appearance-");
+  try {
+    const service = new PitchWorkspaceService(root);
+    const before = await service.state();
+    let slide: any;
+    let target: any;
+    for (const candidate of before.deck.slides) {
+      const found = candidate.scene.find((element) => element.type === "shape" && element.shape !== "custom");
+      if (found) { slide = candidate; target = found; break; }
+    }
+    assert(slide && target, "Demo needs one native shape");
+
+    const result = await service.codexTool({
+      name: "pitch_set_appearance",
+      expectedDeckHash: before.deckHash,
+      arguments: {
+        slideId: slide.id,
+        elementId: target.id,
+        fillKind: "linearGradient",
+        solidColor: null,
+        solidOpacity: null,
+        gradientAngleDeg: 120,
+        gradientStartColor: "#102030",
+        gradientStartOpacity: 1,
+        gradientEndColor: "#C7FF5E",
+        gradientEndOpacity: 0.88,
+        shadowEnabled: true,
+        shadowColor: "#000000",
+        shadowOpacity: 0.2,
+        shadowBlurDU: 22,
+        shadowOffsetXDU: 5,
+        shadowOffsetYDU: 10,
+      },
+    });
+
+    const changed = result.deck.slides.find((item) => item.id === slide.id)?.scene.find((element) => element.id === target.id);
+    assert(changed && changed.type === "shape");
+    if (!changed || changed.type !== "shape") throw new Error("Expected shape");
+    assert.equal(changed.fillPaint?.kind, "linearGradient");
+    assert.equal(changed.effects?.[0]?.kind, "dropShadow");
+    assert.equal(result.tool, "pitch_set_appearance");
+    assert.deepEqual(result.nextSelectionIds, [target.id]);
+    await assertLatestDeckProducedByCodex(service);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("Workspace exposes transitional and strict Codex tools over HTTP", async () => {
   const root = await demoRoot("pitch-codex-registry-");
   const { server } = createWorkspaceServer(root);
   try {
@@ -53,9 +105,12 @@ test("Workspace exposes the bounded Codex tool registry over HTTP", async () => 
     const response = await fetch(`http://127.0.0.1:${address.port}/api/codex/tools`);
     assert.equal(response.status, 200);
     const payload = await response.json() as any;
-    assert.equal(payload.tools.length, 1);
-    assert.equal(payload.tools[0].name, "pitch_editor_command");
-    assert.equal(payload.tools[0].strict, true);
+    assert.equal(payload.tools.length, 3);
+    const byName = new Map(payload.tools.map((tool: any) => [tool.name, tool]));
+    assert.equal(byName.get("pitch_editor_command")?.strict, false);
+    assert.equal(byName.get("pitch_set_style")?.strict, true);
+    assert.equal(byName.get("pitch_set_appearance")?.strict, true);
+    assert.equal(byName.get("pitch_set_appearance")?.parameters?.additionalProperties, false);
   } finally {
     if (server.listening) await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     await rm(root, { recursive: true, force: true });
