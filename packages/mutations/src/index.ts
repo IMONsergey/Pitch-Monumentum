@@ -51,6 +51,12 @@ export type DeckMutationOperation =
       layoutItem: LayoutItemSpec | null;
     }
   | {
+      op: "updateContainerChildren";
+      slideId: string;
+      elementId: string;
+      childIds: string[];
+    }
+  | {
       op: "addElement";
       slideId: string;
       element: SceneElement;
@@ -101,6 +107,54 @@ export interface AppliedDeckMutation {
   changed: boolean;
   deck: DeckDocument;
   impact: MutationImpact;
+}
+
+function isContainer(element: SceneElement): element is Extract<SceneElement, { type: "frame" | "group" }> {
+  return element.type === "frame" || element.type === "group";
+}
+
+/**
+ * Validates the canonical parent/child tree after an atomic mutation batch.
+ * Intermediate states inside a transaction may temporarily have duplicate parents
+ * while reparenting; the committed scene may not.
+ */
+export function validateSceneHierarchy(scene: SceneElement[]): void {
+  const index = new Map<string, SceneElement>();
+  for (const element of scene) {
+    if (index.has(element.id)) throw new Error(`Duplicate scene element id: ${element.id}`);
+    index.set(element.id, element);
+  }
+
+  const parentByChild = new Map<string, string>();
+  for (const element of scene) {
+    if (!isContainer(element)) continue;
+    const local = new Set<string>();
+    for (const childId of element.childIds) {
+      if (local.has(childId)) throw new Error(`Container ${element.id} contains duplicate child ${childId}`);
+      local.add(childId);
+      if (!index.has(childId)) throw new Error(`Container ${element.id} references missing child ${childId}`);
+      const existingParent = parentByChild.get(childId);
+      if (existingParent && existingParent !== element.id) {
+        throw new Error(`Element ${childId} has multiple parents: ${existingParent}, ${element.id}`);
+      }
+      parentByChild.set(childId, element.id);
+    }
+  }
+
+  const visiting = new Set<string>();
+  const visited = new Set<string>();
+  const visit = (id: string): void => {
+    if (visiting.has(id)) throw new Error(`Scene hierarchy cycle detected at ${id}`);
+    if (visited.has(id)) return;
+    visiting.add(id);
+    const element = index.get(id);
+    if (element && isContainer(element)) {
+      for (const childId of element.childIds) visit(childId);
+    }
+    visiting.delete(id);
+    visited.add(id);
+  };
+  for (const element of scene) visit(element.id);
 }
 
 export function deckHash(deck: DeckDocument): string {
@@ -190,9 +244,7 @@ function applyOperation(deck: DeckDocument, operation: DeckMutationOperation): D
       }));
     case "updateAutoLayout":
       return mutateElement(deck, operation.slideId, operation.elementId, (element) => {
-        if (element.type !== "frame" && element.type !== "group") {
-          throw new Error(`Element ${operation.elementId} cannot own auto layout`);
-        }
+        if (!isContainer(element)) throw new Error(`Element ${operation.elementId} cannot own auto layout`);
         return { ...element, layout: operation.layout ?? undefined };
       });
     case "updateLayoutItem":
@@ -200,6 +252,11 @@ function applyOperation(deck: DeckDocument, operation: DeckMutationOperation): D
         ...element,
         layoutItem: operation.layoutItem ?? undefined,
       }));
+    case "updateContainerChildren":
+      return mutateElement(deck, operation.slideId, operation.elementId, (element) => {
+        if (!isContainer(element)) throw new Error(`Element ${operation.elementId} is not a frame/group container`);
+        return { ...element, childIds: [...operation.childIds] };
+      });
     case "addElement": {
       ensureUniqueElementId(deck, operation.element);
       const slide = findSlide(deck, operation.slideId);
@@ -212,11 +269,12 @@ function applyOperation(deck: DeckDocument, operation: DeckMutationOperation): D
     case "removeElement": {
       const slide = findSlide(deck, operation.slideId);
       findElement(slide, operation.elementId);
-      return replaceSlide(deck, operation.slideId, {
-        ...slide,
-        scene: slide.scene.filter((element) => element.id !== operation.elementId),
-        status: "draft",
-      });
+      const scene = slide.scene
+        .filter((element) => element.id !== operation.elementId)
+        .map((element) => isContainer(element) && element.childIds.includes(operation.elementId)
+          ? { ...element, childIds: element.childIds.filter((childId) => childId !== operation.elementId) }
+          : element);
+      return replaceSlide(deck, operation.slideId, { ...slide, scene, status: "draft" });
     }
     case "updateSlideSemantic": {
       const slide = findSlide(deck, operation.slideId);
@@ -269,6 +327,7 @@ function impactForOperation(deck: DeckDocument, operation: DeckMutationOperation
     operation.op === "updateGeometry"
     || operation.op === "updateAutoLayout"
     || operation.op === "updateLayoutItem"
+    || operation.op === "updateContainerChildren"
     || operation.op === "addElement"
     || operation.op === "removeElement"
   ) {
@@ -314,9 +373,16 @@ export function applyDeckMutation(deck: DeckDocument, mutation: DeckMutation): A
   if (mutation.expectedDeckHash && mutation.expectedDeckHash !== beforeHash) {
     throw new Error(`Deck changed since mutation was authored: expected ${mutation.expectedDeckHash}, got ${beforeHash}`);
   }
-  const impacts = mutation.operations.map((operation) => impactForOperation(deck, operation));
+
+  const impacts: MutationImpact[] = [];
   let next = deck;
-  for (const operation of mutation.operations) next = applyOperation(next, operation);
+  for (const operation of mutation.operations) {
+    impacts.push(impactForOperation(next, operation));
+    next = applyOperation(next, operation);
+  }
+
+  for (const slide of next.slides) validateSceneHierarchy(slide.scene);
+
   const afterHash = deckHash(next);
   return {
     mutationId: mutation.id,
