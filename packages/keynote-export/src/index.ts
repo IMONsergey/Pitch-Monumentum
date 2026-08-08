@@ -1,7 +1,8 @@
 import { execFile } from "node:child_process";
-import { access, mkdir, stat } from "node:fs/promises";
+import { access, mkdir } from "node:fs/promises";
 import { dirname, extname, resolve } from "node:path";
 import { promisify } from "node:util";
+import { inspectFilesystemArtifact } from "../../fs-artifact/src/index.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -20,6 +21,9 @@ export interface KeynoteConversionResult {
   inputPptxPath: string;
   outputKeyPath: string;
   bytes: number;
+  outputKind: "file" | "directory";
+  outputFileCount: number;
+  outputSha256: string;
   availability: KeynoteAvailability;
   adapterStatus: "adapter-unverified";
 }
@@ -74,8 +78,16 @@ export async function convertPptxToKeynote(
   await mkdir(dirname(outputPath), { recursive: true });
   const runner = options.runner ?? DEFAULT_RUNNER;
   await runner("/usr/bin/osascript", ["-e", KEYNOTE_SAVE_SCRIPT, "--", inputPath, outputPath]);
-  const info = await stat(outputPath).catch(() => undefined);
-  if (!info) throw new Error(`Keynote did not create output document: ${outputPath}`);
-  if (!info.isFile() && !info.isDirectory()) throw new Error(`Unexpected Keynote output type: ${outputPath}`);
-  return { inputPptxPath: inputPath, outputKeyPath: outputPath, bytes: info.size, availability, adapterStatus: "adapter-unverified" };
+  const inspected = await inspectFilesystemArtifact(outputPath).catch(() => undefined);
+  if (!inspected) throw new Error(`Keynote did not create output document: ${outputPath}`);
+  return {
+    inputPptxPath: inputPath,
+    outputKeyPath: outputPath,
+    bytes: inspected.bytes,
+    outputKind: inspected.kind,
+    outputFileCount: inspected.fileCount,
+    outputSha256: inspected.sha256,
+    availability,
+    adapterStatus: "adapter-unverified",
+  };
 }
