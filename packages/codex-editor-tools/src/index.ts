@@ -1,5 +1,5 @@
 import type { DeckDocument, Geometry, SlideDocument } from "../../deck-model/src/index.js";
-import { applyDeckMutation, createMutation, type AppliedDeckMutation, type DeckMutationOperation, type ElementStylePatch } from "../../mutations/src/index.js";
+import { applyDeckMutation, createMutation, type AppliedDeckMutation, type DeckMutationOperation, type ElementAppearancePatch, type ElementStylePatch } from "../../mutations/src/index.js";
 import {
   alignSelection,
   arrangeSelection,
@@ -19,6 +19,7 @@ import {
 
 export const PITCH_EDITOR_TOOL_NAME = "pitch_editor_command" as const;
 export const PITCH_SET_STYLE_TOOL_NAME = "pitch_set_style" as const;
+export const PITCH_SET_APPEARANCE_TOOL_NAME = "pitch_set_appearance" as const;
 
 export type PitchEditorCommand =
   | { command: "nudge"; slideId: string; elementIds: string[]; dx: number; dy: number }
@@ -49,6 +50,25 @@ export interface PitchSetStyleArguments {
   endMarker: "none" | "arrow" | "dot" | null;
 }
 
+export interface PitchSetAppearanceArguments {
+  slideId: string;
+  elementId: string;
+  fillKind: "unchanged" | "none" | "solid" | "linearGradient";
+  solidColor: string | null;
+  solidOpacity: number | null;
+  gradientAngleDeg: number | null;
+  gradientStartColor: string | null;
+  gradientStartOpacity: number | null;
+  gradientEndColor: string | null;
+  gradientEndOpacity: number | null;
+  shadowEnabled: boolean;
+  shadowColor: string | null;
+  shadowOpacity: number | null;
+  shadowBlurDU: number | null;
+  shadowOffsetXDU: number | null;
+  shadowOffsetYDU: number | null;
+}
+
 export interface PitchEditorToolCall {
   name: typeof PITCH_EDITOR_TOOL_NAME;
   arguments: PitchEditorCommand;
@@ -61,11 +81,17 @@ export interface PitchSetStyleToolCall {
   expectedDeckHash?: string;
 }
 
-export type PitchCodexToolCall = PitchEditorToolCall | PitchSetStyleToolCall;
+export interface PitchSetAppearanceToolCall {
+  name: typeof PITCH_SET_APPEARANCE_TOOL_NAME;
+  arguments: PitchSetAppearanceArguments;
+  expectedDeckHash?: string;
+}
+
+export type PitchCodexToolCall = PitchEditorToolCall | PitchSetStyleToolCall | PitchSetAppearanceToolCall;
 
 export interface PitchEditorToolResult {
   ok: true;
-  tool: typeof PITCH_EDITOR_TOOL_NAME | typeof PITCH_SET_STYLE_TOOL_NAME;
+  tool: typeof PITCH_EDITOR_TOOL_NAME | typeof PITCH_SET_STYLE_TOOL_NAME | typeof PITCH_SET_APPEARANCE_TOOL_NAME;
   command: string;
   mutationId: string;
   beforeHash: string;
@@ -76,11 +102,6 @@ export interface PitchEditorToolResult {
   applied: AppliedDeckMutation;
 }
 
-/**
- * Transitional broad command tool. Its command-specific optional fields are validated
- * by Pitch at runtime, so it deliberately does not advertise strict schema adherence.
- * High-value commands should migrate to narrow strict tools like pitch_set_style.
- */
 export const pitchEditorToolDefinition = {
   type: "function",
   name: PITCH_EDITOR_TOOL_NAME,
@@ -91,10 +112,7 @@ export const pitchEditorToolDefinition = {
     additionalProperties: false,
     required: ["command", "slideId", "elementIds"],
     properties: {
-      command: {
-        type: "string",
-        enum: ["nudge", "align", "distribute", "duplicate", "delete", "group", "ungroup", "arrange", "insertText", "insertShape", "insertFrame"],
-      },
+      command: { type: "string", enum: ["nudge", "align", "distribute", "duplicate", "delete", "group", "ungroup", "arrange", "insertText", "insertShape", "insertFrame"] },
       slideId: { type: "string" },
       elementIds: { type: "array", items: { type: "string" } },
       dx: { type: "number" },
@@ -108,13 +126,7 @@ export const pitchEditorToolDefinition = {
         type: "object",
         additionalProperties: false,
         required: ["x", "y", "width", "height"],
-        properties: {
-          x: { type: "number" },
-          y: { type: "number" },
-          width: { type: "number" },
-          height: { type: "number" },
-          rotation: { type: "number" },
-        },
+        properties: { x: { type: "number" }, y: { type: "number" }, width: { type: "number" }, height: { type: "number" }, rotation: { type: "number" } },
       },
       text: { type: "string" },
       fontSizePt: { type: "number" },
@@ -125,11 +137,6 @@ export const pitchEditorToolDefinition = {
   },
 } as const;
 
-/**
- * Strict tool: all keys are required and target-specific optional values are explicit
- * nulls. This keeps the schema predictable for Responses/Codex while runtime checks
- * still ensure the requested style kind matches the canonical scene element.
- */
 export const pitchSetStyleToolDefinition = {
   type: "function",
   name: PITCH_SET_STYLE_TOOL_NAME,
@@ -140,24 +147,33 @@ export const pitchSetStyleToolDefinition = {
     additionalProperties: false,
     required: ["slideId", "elementId", "kind", "fill", "strokeColor", "strokeWidthDU", "dash", "radiusDU", "clipContent", "fit", "cornerRadiusDU", "startMarker", "endMarker"],
     properties: {
-      slideId: { type: "string" },
-      elementId: { type: "string" },
-      kind: { type: "string", enum: ["shape", "frame", "image", "line"] },
-      fill: { type: ["string", "null"] },
-      strokeColor: { type: ["string", "null"] },
-      strokeWidthDU: { type: ["number", "null"] },
-      dash: { enum: ["solid", "dash", "dot", null] },
-      radiusDU: { type: ["number", "null"] },
-      clipContent: { type: ["boolean", "null"] },
-      fit: { enum: ["cover", "contain", "stretch", null] },
-      cornerRadiusDU: { type: ["number", "null"] },
-      startMarker: { enum: ["none", "arrow", "dot", null] },
-      endMarker: { enum: ["none", "arrow", "dot", null] },
+      slideId: { type: "string" }, elementId: { type: "string" }, kind: { type: "string", enum: ["shape", "frame", "image", "line"] },
+      fill: { type: ["string", "null"] }, strokeColor: { type: ["string", "null"] }, strokeWidthDU: { type: ["number", "null"] }, dash: { enum: ["solid", "dash", "dot", null] },
+      radiusDU: { type: ["number", "null"] }, clipContent: { type: ["boolean", "null"] }, fit: { enum: ["cover", "contain", "stretch", null] }, cornerRadiusDU: { type: ["number", "null"] },
+      startMarker: { enum: ["none", "arrow", "dot", null] }, endMarker: { enum: ["none", "arrow", "dot", null] },
     },
   },
 } as const;
 
-export const pitchCodexToolDefinitions = [pitchEditorToolDefinition, pitchSetStyleToolDefinition] as const;
+export const pitchSetAppearanceToolDefinition = {
+  type: "function",
+  name: PITCH_SET_APPEARANCE_TOOL_NAME,
+  description: "Set the canonical Pitch fill paint and drop shadow of exactly one element. Use fillKind=unchanged for elements that do not support fills or when changing shadow only. All unused values must be null.",
+  strict: true,
+  parameters: {
+    type: "object",
+    additionalProperties: false,
+    required: ["slideId", "elementId", "fillKind", "solidColor", "solidOpacity", "gradientAngleDeg", "gradientStartColor", "gradientStartOpacity", "gradientEndColor", "gradientEndOpacity", "shadowEnabled", "shadowColor", "shadowOpacity", "shadowBlurDU", "shadowOffsetXDU", "shadowOffsetYDU"],
+    properties: {
+      slideId: { type: "string" }, elementId: { type: "string" }, fillKind: { type: "string", enum: ["unchanged", "none", "solid", "linearGradient"] },
+      solidColor: { type: ["string", "null"] }, solidOpacity: { type: ["number", "null"] }, gradientAngleDeg: { type: ["number", "null"] },
+      gradientStartColor: { type: ["string", "null"] }, gradientStartOpacity: { type: ["number", "null"] }, gradientEndColor: { type: ["string", "null"] }, gradientEndOpacity: { type: ["number", "null"] },
+      shadowEnabled: { type: "boolean" }, shadowColor: { type: ["string", "null"] }, shadowOpacity: { type: ["number", "null"] }, shadowBlurDU: { type: ["number", "null"] }, shadowOffsetXDU: { type: ["number", "null"] }, shadowOffsetYDU: { type: ["number", "null"] },
+    },
+  },
+} as const;
+
+export const pitchCodexToolDefinitions = [pitchEditorToolDefinition, pitchSetStyleToolDefinition, pitchSetAppearanceToolDefinition] as const;
 
 function findSlide(deck: DeckDocument, slideId: string): SlideDocument {
   const slide = deck.slides.find((item) => item.id === slideId);
@@ -172,45 +188,16 @@ function zAfter(slide: SlideDocument): number {
 export function buildPitchEditorToolOperations(deck: DeckDocument, args: PitchEditorCommand): { operations: DeckMutationOperation[]; nextSelectionIds: string[] } {
   const slide = findSlide(deck, args.slideId);
   switch (args.command) {
-    case "nudge": {
-      const result = nudgeSelection(slide, args.elementIds, args.dx, args.dy);
-      return { operations: result.operations, nextSelectionIds: result.nextSelectionIds };
-    }
-    case "align": {
-      const result = alignSelection(slide, args.elementIds, args.alignment);
-      return { operations: result.operations, nextSelectionIds: result.nextSelectionIds };
-    }
-    case "distribute": {
-      const result = distributeSelection(slide, args.elementIds, args.axis);
-      return { operations: result.operations, nextSelectionIds: result.nextSelectionIds };
-    }
-    case "duplicate": {
-      const result = duplicateSelection(slide, args.elementIds, args.offsetDU);
-      return { operations: result.operations, nextSelectionIds: result.nextSelectionIds };
-    }
-    case "delete": {
-      const result = deleteSelection(slide, args.elementIds);
-      return { operations: result.operations, nextSelectionIds: result.nextSelectionIds };
-    }
-    case "group": {
-      const result = groupSelection(slide, args.elementIds, args.groupId);
-      return { operations: result.operations, nextSelectionIds: result.nextSelectionIds };
-    }
-    case "ungroup": {
-      const result = ungroupSelection(slide, args.elementIds);
-      return { operations: result.operations, nextSelectionIds: result.nextSelectionIds };
-    }
-    case "arrange": {
-      const result = arrangeSelection(slide, args.elementIds, args.arrangement);
-      return { operations: result.operations, nextSelectionIds: result.nextSelectionIds };
-    }
+    case "nudge": { const result = nudgeSelection(slide, args.elementIds, args.dx, args.dy); return { operations: result.operations, nextSelectionIds: result.nextSelectionIds }; }
+    case "align": { const result = alignSelection(slide, args.elementIds, args.alignment); return { operations: result.operations, nextSelectionIds: result.nextSelectionIds }; }
+    case "distribute": { const result = distributeSelection(slide, args.elementIds, args.axis); return { operations: result.operations, nextSelectionIds: result.nextSelectionIds }; }
+    case "duplicate": { const result = duplicateSelection(slide, args.elementIds, args.offsetDU); return { operations: result.operations, nextSelectionIds: result.nextSelectionIds }; }
+    case "delete": { const result = deleteSelection(slide, args.elementIds); return { operations: result.operations, nextSelectionIds: result.nextSelectionIds }; }
+    case "group": { const result = groupSelection(slide, args.elementIds, args.groupId); return { operations: result.operations, nextSelectionIds: result.nextSelectionIds }; }
+    case "ungroup": { const result = ungroupSelection(slide, args.elementIds); return { operations: result.operations, nextSelectionIds: result.nextSelectionIds }; }
+    case "arrange": { const result = arrangeSelection(slide, args.elementIds, args.arrangement); return { operations: result.operations, nextSelectionIds: result.nextSelectionIds }; }
     case "insertText": {
-      const element = createTextElement({
-        geometry: args.geometry,
-        zIndex: zAfter(slide),
-        origin: "agent",
-        paragraphs: [{ runs: [{ text: args.text ?? "Text", fontSizePt: args.fontSizePt ?? 24, color: "#111111" }] }],
-      });
+      const element = createTextElement({ geometry: args.geometry, zIndex: zAfter(slide), origin: "agent", paragraphs: [{ runs: [{ text: args.text ?? "Text", fontSizePt: args.fontSizePt ?? 24, color: "#111111" }] }] });
       return { operations: [{ op: "addElement", slideId: slide.id, element }], nextSelectionIds: [element.id] };
     }
     case "insertShape": {
@@ -225,36 +212,50 @@ export function buildPitchEditorToolOperations(deck: DeckDocument, args: PitchEd
 }
 
 function styleFromTool(args: PitchSetStyleArguments): ElementStylePatch {
-  const stroke = args.strokeColor !== null && args.strokeWidthDU !== null
-    ? { color: args.strokeColor, widthDU: args.strokeWidthDU, ...(args.dash ? { dash: args.dash } : {}) }
-    : null;
+  const stroke = args.strokeColor !== null && args.strokeWidthDU !== null ? { color: args.strokeColor, widthDU: args.strokeWidthDU, ...(args.dash ? { dash: args.dash } : {}) } : null;
   if (args.kind === "shape") return { kind: "shape", fill: args.fill, stroke, radiusDU: args.radiusDU };
   if (args.kind === "frame") return { kind: "frame", fill: args.fill, stroke, radiusDU: args.radiusDU, ...(args.clipContent !== null ? { clipContent: args.clipContent } : {}) };
   if (args.kind === "image") return { kind: "image", cornerRadiusDU: args.cornerRadiusDU, ...(args.fit !== null ? { fit: args.fit } : {}) };
-  return {
-    kind: "line",
-    ...(stroke ? { stroke } : {}),
-    ...(args.startMarker !== null ? { startMarker: args.startMarker } : {}),
-    ...(args.endMarker !== null ? { endMarker: args.endMarker } : {}),
+  return { kind: "line", ...(stroke ? { stroke } : {}), ...(args.startMarker !== null ? { startMarker: args.startMarker } : {}), ...(args.endMarker !== null ? { endMarker: args.endMarker } : {}) };
+}
+
+function requireValue<T>(value: T | null, label: string): T {
+  if (value === null) throw new Error(`${label} is required for this appearance mode`);
+  return value;
+}
+
+function appearanceFromTool(args: PitchSetAppearanceArguments): ElementAppearancePatch {
+  const appearance: ElementAppearancePatch = {};
+  if (args.fillKind === "none") appearance.fillPaint = { kind: "none" };
+  else if (args.fillKind === "solid") appearance.fillPaint = {
+    kind: "solid",
+    color: requireValue(args.solidColor, "solidColor"),
+    opacity: requireValue(args.solidOpacity, "solidOpacity"),
   };
+  else if (args.fillKind === "linearGradient") appearance.fillPaint = {
+    kind: "linearGradient",
+    angleDeg: requireValue(args.gradientAngleDeg, "gradientAngleDeg"),
+    stops: [
+      { position: 0, color: requireValue(args.gradientStartColor, "gradientStartColor"), opacity: requireValue(args.gradientStartOpacity, "gradientStartOpacity") },
+      { position: 1, color: requireValue(args.gradientEndColor, "gradientEndColor"), opacity: requireValue(args.gradientEndOpacity, "gradientEndOpacity") },
+    ],
+  };
+  appearance.effects = args.shadowEnabled ? [{
+    kind: "dropShadow",
+    color: requireValue(args.shadowColor, "shadowColor"),
+    opacity: requireValue(args.shadowOpacity, "shadowOpacity"),
+    blurDU: requireValue(args.shadowBlurDU, "shadowBlurDU"),
+    offsetXDU: requireValue(args.shadowOffsetXDU, "shadowOffsetXDU"),
+    offsetYDU: requireValue(args.shadowOffsetYDU, "shadowOffsetYDU"),
+  }] : [];
+  return appearance;
 }
 
 function executeApplied(deck: DeckDocument, tool: PitchEditorToolResult["tool"], command: string, operations: DeckMutationOperation[], nextSelectionIds: string[], expectedDeckHash?: string): PitchEditorToolResult {
   if (!operations.length) throw new Error(`Pitch tool ${tool} produced no mutation`);
   const mutation = createMutation(`Codex tool ${tool}: ${command}`, operations, "codex", expectedDeckHash);
   const applied = applyDeckMutation(deck, mutation);
-  return {
-    ok: true,
-    tool,
-    command,
-    mutationId: mutation.id,
-    beforeHash: applied.beforeHash,
-    afterHash: applied.afterHash,
-    affectedSlideIds: applied.impact.affectedSlideIds,
-    affectedElementIds: applied.impact.affectedElementIds,
-    nextSelectionIds,
-    applied,
-  };
+  return { ok: true, tool, command, mutationId: mutation.id, beforeHash: applied.beforeHash, afterHash: applied.afterHash, affectedSlideIds: applied.impact.affectedSlideIds, affectedElementIds: applied.impact.affectedElementIds, nextSelectionIds, applied };
 }
 
 export function executePitchEditorTool(deck: DeckDocument, call: PitchEditorToolCall): PitchEditorToolResult {
@@ -273,7 +274,18 @@ export function executePitchSetStyleTool(deck: DeckDocument, call: PitchSetStyle
   return executeApplied(deck, call.name, "setStyle", [operation], [element.id], call.expectedDeckHash);
 }
 
+export function executePitchSetAppearanceTool(deck: DeckDocument, call: PitchSetAppearanceToolCall): PitchEditorToolResult {
+  if (call.name !== PITCH_SET_APPEARANCE_TOOL_NAME) throw new Error(`Unsupported Pitch tool: ${call.name}`);
+  const slide = findSlide(deck, call.arguments.slideId);
+  const element = slide.scene.find((item) => item.id === call.arguments.elementId);
+  if (!element) throw new Error(`Unknown element ${call.arguments.elementId} on slide ${slide.id}`);
+  const appearance = appearanceFromTool(call.arguments);
+  const operation: DeckMutationOperation = { op: "updateElementAppearance", slideId: slide.id, elementId: element.id, appearance };
+  return executeApplied(deck, call.name, "setAppearance", [operation], [element.id], call.expectedDeckHash);
+}
+
 export function executePitchCodexTool(deck: DeckDocument, call: PitchCodexToolCall): PitchEditorToolResult {
   if (call.name === PITCH_SET_STYLE_TOOL_NAME) return executePitchSetStyleTool(deck, call);
+  if (call.name === PITCH_SET_APPEARANCE_TOOL_NAME) return executePitchSetAppearanceTool(deck, call);
   return executePitchEditorTool(deck, call);
 }
