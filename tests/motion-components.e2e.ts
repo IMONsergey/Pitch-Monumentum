@@ -65,7 +65,7 @@ test("Motion Studio, Components and Presenter are reachable and preserve editor 
     }
     const targetNode = page.locator(`#spikeScene [data-id="${target.id}"]`);
     await targetNode.click();
-    await page.locator("#spikeSelection").getByText("1 selected", { exact: false }).waitFor();
+    await page.locator("#spikeSelection").filter({ hasText: "1 selected" }).waitFor();
 
     await page.getByRole("button", { name: "Motion", exact: true }).click();
     await page.locator("#pitchMotionDrawer.open").waitFor();
@@ -95,7 +95,8 @@ test("Motion Studio, Components and Presenter are reachable and preserve editor 
     await page.getByRole("button", { name: "Present", exact: true }).click();
     await page.locator("#pitchPresenter.open").waitFor();
     await page.locator("#pitchPresenterStage").waitFor({ state: "visible" });
-    assert.match((await page.locator(".pitch-presenter-bar").textContent()) ?? "", new RegExp(targetSlide.title.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+    const presenterBar = (await page.locator(".pitch-presenter-bar").textContent()) ?? "";
+    assert(presenterBar.includes(targetSlide.title), "Presenter must start from the currently active slide");
     await page.locator("[data-presenter=close]").click();
     await page.locator("#pitchPresenter").waitFor({ state: "hidden" });
   } finally {
