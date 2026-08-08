@@ -5,6 +5,7 @@ import { ArtifactStore, type ProjectManifest, type BranchArtifactHead } from "..
 import type { AutoLayoutSpec, DeckDocument } from "../../../packages/deck-model/src/index.js";
 import { applyDeckMutation, createMutation, deckHash, type DeckMutationOperation } from "../../../packages/mutations/src/index.js";
 import { setAutoLayoutMutationOperations, wrapSelectionInAutoLayoutOperations } from "../../../packages/auto-layout/src/index.js";
+import { executeEditorCommand, type EditorCommandInput } from "../../../packages/editor-commands/src/service.js";
 import { runDeterministicQA } from "../../../packages/qa/src/index.js";
 import { exportProductionPptx } from "../../../packages/export-pipeline/src/index.js";
 import { VersionJournal } from "../../../packages/version-history/src/index.js";
@@ -26,6 +27,8 @@ function activeHeadByKind(manifest: ProjectManifest, kind: string): BranchArtifa
 async function staticAsset(name: "workspace.css" | "workspace.js" | "editor-spike.js"): Promise<string> {
   return readFile(resolve("apps", "workspace", "public", name), "utf8");
 }
+
+type EditorCommandRequest = EditorCommandInput & { expectedDeckHash?: string };
 
 export class PitchWorkspaceService {
   readonly root: string;
@@ -62,6 +65,33 @@ export class PitchWorkspaceService {
       producer: { type: "deterministic" }, inputs: [deckArtifact], status: qa.some((issue) => issue.severity === "critical") ? "needsReview" : "ready"
     });
     return this.state();
+  }
+
+  async editorCommand(input: EditorCommandRequest) {
+    const current = await this.state();
+    if (input.expectedDeckHash && input.expectedDeckHash !== current.deckHash) {
+      throw new Error(`Deck changed since editor command was authored: expected ${input.expectedDeckHash}, got ${current.deckHash}`);
+    }
+    const executed = executeEditorCommand(current.deck, input);
+    if (!executed.operations.length) {
+      return {
+        ...current,
+        nextSelectionIds: executed.nextSelectionIds,
+        reflowedContainerIds: executed.reflowedContainerIds,
+        commandReason: executed.reason,
+      };
+    }
+    const next = await this.mutate({
+      reason: executed.reason,
+      operations: executed.operations,
+      expectedDeckHash: current.deckHash,
+    });
+    return {
+      ...next,
+      nextSelectionIds: executed.nextSelectionIds,
+      reflowedContainerIds: executed.reflowedContainerIds,
+      commandReason: executed.reason,
+    };
   }
 
   async setAutoLayout(input: { slideId: string; elementId: string; layout: AutoLayoutSpec; expectedDeckHash?: string }) {
@@ -143,6 +173,7 @@ export function createWorkspaceServer(projectRoot: string) {
       if (req.method === "GET" && url.pathname === "/editor-spike.js") { res.writeHead(200, { "content-type": "text/javascript; charset=utf-8", "cache-control": "no-store" }); res.end(await staticAsset("editor-spike.js")); return; }
       if (req.method === "GET" && url.pathname === "/api/project") { json(res, 200, await service.state()); return; }
       if (req.method === "POST" && url.pathname === "/api/mutate") { json(res, 200, await service.mutate(await body(req))); return; }
+      if (req.method === "POST" && url.pathname === "/api/editor-command") { json(res, 200, await service.editorCommand(await body(req))); return; }
       if (req.method === "POST" && url.pathname === "/api/auto-layout") {
         const data = await body(req);
         if (!data.slideId || !data.elementId || !data.layout) throw new Error("slideId, elementId and layout are required");
