@@ -67,8 +67,12 @@ test("Figma Bridge and Standalone Web delivery write self-contained inspectable 
     }
     const figma = await h.delivery.exportFigma();
     const web = await h.delivery.exportWeb();
-    assert(figma.artifact.bytes > 0);
-    assert(web.artifact.bytes > 0);
+    for (const artifact of [figma.artifact, web.artifact]) {
+      assert(artifact.bytes > 0);
+      assert.equal(artifact.filesystemKind, "file");
+      assert.equal(artifact.fileCount, 1);
+      assert.match(artifact.sha256, /^[0-9a-f]{64}$/);
+    }
     assert.match(figma.artifact.filename, /figma-bridge\.json$/);
     assert.match(web.artifact.filename, /standalone\.html$/);
     const bridge = JSON.parse(await readFile(figma.artifact.path, "utf8"));
