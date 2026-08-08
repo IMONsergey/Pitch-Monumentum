@@ -314,9 +314,14 @@ export function applyDeckMutation(deck: DeckDocument, mutation: DeckMutation): A
   if (mutation.expectedDeckHash && mutation.expectedDeckHash !== beforeHash) {
     throw new Error(`Deck changed since mutation was authored: expected ${mutation.expectedDeckHash}, got ${beforeHash}`);
   }
-  const impacts = mutation.operations.map((operation) => impactForOperation(deck, operation));
+
+  const impacts: MutationImpact[] = [];
   let next = deck;
-  for (const operation of mutation.operations) next = applyOperation(next, operation);
+  for (const operation of mutation.operations) {
+    impacts.push(impactForOperation(next, operation));
+    next = applyOperation(next, operation);
+  }
+
   const afterHash = deckHash(next);
   return {
     mutationId: mutation.id,
