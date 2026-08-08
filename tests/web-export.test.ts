@@ -78,3 +78,43 @@ test("basic click-build semantics are compiled into the self-contained player", 
   assert.match(result.html, /ArrowRight/);
   assert.match(result.html, /PageDown/);
 });
+
+test("Web renderer uses canonical duPerInch and preserves rich visual primitives", () => {
+  const deck = fixture();
+  deck.canvas = { widthDU: 1440, heightDU: 900, duPerInch: 144, aspectRatio: "custom" };
+  deck.slides[0].scene = [
+    {
+      id: "rich_text", type: "text", semanticRole: "body", geometry: { x: 40, y: 50, width: 800, height: 240 }, zIndex: 1,
+      origin: "user", exportStrategy: "native", dependencies: [], verticalAlign: "middle", insetsDU: [12, 24, 18, 30],
+      paragraphs: [{ align: "left", bullet: { level: 1, marker: "→" }, spaceBeforePt: 6, spaceAfterPt: 9, runs: [{ text: "Canonical scale", fontFamily: "IBM Plex Sans", fontSizePt: 72, letterSpacingPt: 1.5, color: "#112233", bold: true }] }],
+    } as any,
+    {
+      id: "gradient", type: "shape", shape: "roundRect", semanticRole: "visual", geometry: { x: 40, y: 330, width: 500, height: 240 }, zIndex: 2,
+      origin: "user", exportStrategy: "native", dependencies: [], radiusDU: 24,
+      fillPaint: { kind: "linearGradient", angleDeg: 90, stops: [{ position: 0, color: "#FF0000" }, { position: 1, color: "#0000FF", opacity: .5 }] },
+      effects: [{ kind: "dropShadow", color: "#000000", opacity: .35, blurDU: 16, offsetXDU: 6, offsetYDU: 10 }],
+    } as any,
+    {
+      id: "vector", type: "shape", shape: "custom", semanticRole: "visual", geometry: { x: 600, y: 330, width: 300, height: 240 }, zIndex: 3,
+      origin: "user", exportStrategy: "native", dependencies: [], fill: "#22AA77",
+      pathData: { fillRule: "evenodd", commands: [
+        { command: "M", x: 0, y: 0 },
+        { command: "L", x: 120, y: 0 },
+        { command: "Q", x1: 170, y1: 80, x: 120, y: 160 },
+        { command: "C", x1: 80, y1: 210, x2: 30, y2: 190, x: 0, y: 120 },
+        { command: "Z" },
+      ] },
+    } as any,
+  ];
+
+  const result = exportStandaloneWeb(deck, {});
+  assert.match(result.html, /width:1440px;height:900px/);
+  assert.match(result.html, /font-size:144px/); // 72pt × 144DU/in ÷ 72pt/in
+  assert.match(result.html, /letter-spacing:3px/);
+  assert.match(result.html, /padding:12px 24px 18px 30px/);
+  assert.match(result.html, /→/);
+  assert.match(result.html, /linear-gradient\(90deg/);
+  assert.match(result.html, /drop-shadow\(6px 10px 16px rgba\(0,0,0,0\.35\)\)/);
+  assert.match(result.html, /d="M0 0 L120 0 Q170 80 120 160 C80 210 30 190 0 120 Z"/);
+  assert.match(result.html, /fill-rule="evenodd"/);
+});
