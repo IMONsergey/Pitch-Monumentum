@@ -1,0 +1,12 @@
+{
+  "name": "Pitch Monumentum Importer",
+  "id": "REPLACE_WITH_FIGMA_ASSIGNED_PLUGIN_ID",
+  "api": "1.0.0",
+  "editorType": ["figma", "slides"],
+  "main": "code.js",
+  "ui": "ui.html",
+  "documentAccess": "dynamic-page",
+  "networkAccess": {
+    "allowedDomains": ["none"]
+  }
+}
