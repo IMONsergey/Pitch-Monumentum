@@ -1,32 +1,13 @@
 import type { Geometry, VectorPathData } from "../../deck-model/src/index.js";
-import { validateVectorPathData } from "./index.js";
+import { vectorPathBounds as canonicalVectorPathBounds } from "../../vector-path/src/index.js";
 
-export interface VectorPathBounds {
-  left: number;
-  top: number;
-  right: number;
-  bottom: number;
-  width: number;
-  height: number;
-}
+/** @deprecated Import vectorPathBounds from @pitch/vector-path instead. */
+export const vectorPathBounds = canonicalVectorPathBounds;
 
-export function vectorPathBounds(path: VectorPathData): VectorPathBounds {
-  validateVectorPathData(path);
-  const points: Array<[number, number]> = [];
-  for (const command of path.commands) {
-    if (command.command === "Z") continue;
-    points.push([command.x, command.y]);
-    if (command.command === "Q" || command.command === "C") points.push([command.x1, command.y1]);
-    if (command.command === "C") points.push([command.x2, command.y2]);
-  }
-  if (!points.length) throw new Error("Vector path has no measurable points");
-  const left = Math.min(...points.map(([x]) => x));
-  const top = Math.min(...points.map(([, y]) => y));
-  const right = Math.max(...points.map(([x]) => x));
-  const bottom = Math.max(...points.map(([, y]) => y));
-  return { left, top, right, bottom, width: Math.max(0.001, right - left), height: Math.max(0.001, bottom - top) };
-}
-
+/**
+ * Legacy convenience shape used by early vector editor tests. Kept as a thin helper;
+ * all geometry math lives in packages/vector-path.
+ */
 export function defaultVectorPath(geometry: Pick<Geometry, "width" | "height">): VectorPathData {
   const width = Math.max(1, geometry.width);
   const height = Math.max(1, geometry.height);
