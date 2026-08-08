@@ -21,6 +21,7 @@ const required = [
   "apps/review/src/runtime.ts",
   "apps/versions/src/runtime.ts",
   "apps/creative-director/src/runtime.ts",
+  "apps/system-health/src/runtime.ts",
   "packages/web-export/src/index.ts",
   "packages/figma-bridge/src/index.ts",
   "packages/keynote-export/src/index.ts",
@@ -44,6 +45,7 @@ const publicLayers = [
   "review-ui.js",
   "review-governance-ui.js",
   "delivery-ui.js",
+  "system-health-ui.js",
 ];
 
 for (const path of required) if (!existsSync(resolve(root, path))) errors.push(`Missing required full-stack file: ${path}`);
