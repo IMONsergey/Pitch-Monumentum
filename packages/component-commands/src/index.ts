@@ -78,6 +78,26 @@ function localizeElement(element: SceneElement, includedIds: Set<string>, left: 
   return next as SceneElement;
 }
 
+function authoredSourceId(element: SceneElement): string {
+  return element.tags?.find((tag) => tag.startsWith("component-source:"))?.slice("component-source:".length) || element.id;
+}
+
+function canonicalizeAuthoredElements(elements: SceneElement[], rootIds: string[]): { elements: SceneElement[]; rootIds: string[] } {
+  const idMap = new Map(elements.map((element) => [element.id, authoredSourceId(element)]));
+  const canonicalIds = [...idMap.values()];
+  if (new Set(canonicalIds).size !== canonicalIds.length) throw new Error("Component authoring produced duplicate source element identities");
+  const nextElements = elements.map((element) => {
+    const next: any = structuredClone(element);
+    next.id = idMap.get(element.id)!;
+    if (next.groupId) next.groupId = idMap.get(next.groupId) ?? next.groupId;
+    if (next.type === "frame" || next.type === "group") next.childIds = next.childIds.map((id: string) => idMap.get(id) ?? id);
+    next.tags = next.tags?.filter((tag: string) => !tag.startsWith("component:") && !tag.startsWith("component-def:") && !tag.startsWith("component-source:"));
+    if (!next.tags?.length) next.tags = undefined;
+    return next as SceneElement;
+  });
+  return { elements: nextElements, rootIds: rootIds.map((id) => idMap.get(id) ?? id) };
+}
+
 function autoSlots(elements: SceneElement[]): ComponentSlot[] {
   const slots: ComponentSlot[] = [];
   for (const element of elements) {
@@ -94,7 +114,8 @@ export function createComponentDefinitionFromSelection(input: CreateComponentInp
   const closure = selectedClosure(input.slide, input.selectedIds);
   const box = bounds(closure.elements);
   const included = new Set(closure.elements.map((element) => element.id));
-  const elements = closure.elements.map((element) => localizeElement(element, included, box.left, box.top));
+  const localized = closure.elements.map((element) => localizeElement(element, included, box.left, box.top));
+  const canonical = canonicalizeAuthoredElements(localized, closure.rootIds);
   const definition: ComponentDefinition = {
     schemaVersion: "0.1",
     id: input.componentId?.trim() || `component_${randomUUID()}`,
@@ -102,9 +123,9 @@ export function createComponentDefinitionFromSelection(input: CreateComponentInp
     description: input.description?.trim() || undefined,
     widthDU: Math.max(1, box.width),
     heightDU: Math.max(1, box.height),
-    rootIds: closure.rootIds,
-    elements,
-    slots: autoSlots(elements),
+    rootIds: canonical.rootIds,
+    elements: canonical.elements,
+    slots: autoSlots(canonical.elements),
   };
   validateComponentDefinition(definition);
   return definition;
@@ -188,6 +209,7 @@ export function componentInstanceSummaries(deck: DeckDocument): ComponentInstanc
     if (!id || !componentId) continue;
     const key = `${slide.id}:${id}`;
     const current = groups.get(key) ?? { id, componentId, slideId: slide.id, elementIds: [] };
+    if (current.componentId !== componentId) throw new Error(`Component instance ${id} mixes definition identities on slide ${slide.id}`);
     current.elementIds.push(element.id);
     groups.set(key, current);
   }
@@ -284,6 +306,7 @@ export function refreshComponentInstancesInDeck(deck: DeckDocument, previousDefi
     const instanceIds = [...new Set(slide.scene.filter((element) => componentDefinitionId(element) === previousDefinition.id).map(componentInstanceId).filter((id): id is string => Boolean(id)))];
     if (!instanceIds.length) return slide;
     let scene = slide.scene;
+    let slideChanged = false;
     for (const instanceId of instanceIds) {
       const current = scene.filter((element) => componentInstanceId(element) === instanceId && componentDefinitionId(element) === previousDefinition.id);
       if (!current.length) continue;
@@ -292,8 +315,9 @@ export function refreshComponentInstancesInDeck(deck: DeckDocument, previousDefi
       scene = [...scene.filter((element) => !oldIds.has(element.id)), ...refreshed];
       affectedElementIds.push(...oldIds, ...refreshed.map((element) => element.id));
       changed = true;
+      slideChanged = true;
     }
-    if (!changed) return slide;
+    if (!slideChanged) return slide;
     affectedSlideIds.push(slide.id);
     return { ...slide, status: "draft" as const, scene };
   });
