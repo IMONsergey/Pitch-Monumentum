@@ -56,12 +56,12 @@ function actions(): PaletteAction[] {
   const editor = runtime();
   const slide = editor?.getSlide();
   const selected = selection();
-  const one = selected.length === 1;
   const many = selected.length >= 2;
   return [
     { id: "insert-text", label: "Insert text", hint: "New editable text box", keywords: "insert add text typography", enabled: () => Boolean(slide), run: () => command({ command: "insertText", geometry: { x: 600, y: 440, width: 720, height: 120 }, text: "Text" }) },
     { id: "insert-shape", label: "Insert shape", hint: "Rectangle", keywords: "insert add shape rectangle", enabled: () => Boolean(slide), run: () => command({ command: "insertShape", geometry: { x: 760, y: 390, width: 400, height: 260 }, shape: "rect", fill: "#E9EDF2" }) },
     { id: "insert-frame", label: "Insert frame", hint: "Container", keywords: "insert add frame container", enabled: () => Boolean(slide), run: () => command({ command: "insertFrame", geometry: { x: 600, y: 300, width: 720, height: 480 } }) },
+    { id: "assets", label: "Open Assets Library", hint: "Images · drag/drop · paste", keywords: "assets image photo media upload import library", enabled: () => Boolean(slide), run: () => click(".pitch-assets-toggle") },
     { id: "duplicate", label: "Duplicate selection", hint: "⌘D", keywords: "duplicate copy clone selection", enabled: () => selected.length > 0, run: () => command({ command: "duplicate", selectedIds: selected }) },
     { id: "delete", label: "Delete selection", hint: "⌫", keywords: "delete remove selection", enabled: () => selected.length > 0, run: () => command({ command: "delete", selectedIds: selected }) },
     { id: "group", label: "Group selection", hint: "⌘G", keywords: "group selection", enabled: () => many, run: () => command({ command: "group", selectedIds: selected }) },
