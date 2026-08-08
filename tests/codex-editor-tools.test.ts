@@ -92,7 +92,7 @@ test("stale Codex tool call is rejected by the same optimistic lock as manual ed
   }), /Deck changed since mutation was authored/);
 });
 
-test("Codex insert creates a normal native scene element", () => {
+test("Codex insert creates a normal native scene element with agent provenance", () => {
   const result = executePitchEditorTool(fixture(), {
     name: "pitch_editor_command",
     arguments: {
@@ -108,7 +108,7 @@ test("Codex insert creates a normal native scene element", () => {
   assert(inserted && inserted.type === "text");
   if (!inserted || inserted.type !== "text") throw new Error("Expected native text element");
   assert.equal(inserted.paragraphs[0].runs[0].text, "Generated through the editor tool");
-  assert.equal(inserted.origin, "user");
+  assert.equal(inserted.origin, "agent");
   assert.equal(inserted.exportStrategy, "native");
 });
 
