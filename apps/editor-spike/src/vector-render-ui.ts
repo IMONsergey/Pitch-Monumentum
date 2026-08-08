@@ -1,6 +1,6 @@
 import { effectiveFillPaint } from "../../../packages/appearance/src/index.js";
 import { effectiveVectorSvgPath } from "../../../packages/vector-engine/src/index.js";
-import { vectorPathBounds } from "../../../packages/vector-engine/src/path-utils.js";
+import { vectorPathBounds } from "../../../packages/vector-path/src/index.js";
 
 type AnyRecord = Record<string, any>;
 
@@ -62,7 +62,7 @@ function hydrateVectors(): void {
     const ns = "http://www.w3.org/2000/svg";
     const svg = document.createElementNS(ns, "svg");
     const box = element.pathData ? vectorPathBounds(element.pathData) : { left: 0, top: 0, width: Math.max(.01, element.geometry.width), height: Math.max(.01, element.geometry.height) };
-    svg.setAttribute("viewBox", `${box.left} ${box.top} ${box.width} ${box.height}`);
+    svg.setAttribute("viewBox", `${box.left} ${box.top} ${Math.max(.01, box.width)} ${Math.max(.01, box.height)}`);
     svg.setAttribute("width", "100%"); svg.setAttribute("height", "100%"); svg.setAttribute("preserveAspectRatio", "none");
     svg.style.display = "block"; svg.style.overflow = "visible"; svg.style.pointerEvents = "none"; svg.style.filter = vectorShadow(element);
 
