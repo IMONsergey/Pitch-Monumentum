@@ -352,6 +352,12 @@ export class PitchWorkspaceService {
       return { ...(await this.state()), component: definition, componentVersion: artifact.version, commandReason: `Create component ${definition.name}` };
     }
 
+    if (input.command === "detach") {
+      const result = detachComponentFromDeck(current.deck, input.slideId, input.instanceId);
+      const next = await this.writeDeckVersion({ current, deck: result.deck, reason: result.reason, impact: impactForVisualEdit(result.affectedSlideIds, result.affectedElementIds) });
+      return { ...next, nextSelectionIds: result.nextSelectionIds, commandReason: result.reason };
+    }
+
     const componentHead = current.manifest.branches[current.manifest.activeBranchId]?.heads[input.componentId];
     if (!componentHead || componentHead.kind !== "component") throw new Error(`Unknown component: ${input.componentId}`);
     const previousDefinition = (await this.store.read<ComponentDefinition>(componentHead.id, componentHead.version)).payload;
@@ -393,9 +399,7 @@ export class PitchWorkspaceService {
       return { ...next, nextSelectionIds: result.nextSelectionIds, commandReason: result.reason };
     }
 
-    const result = detachComponentFromDeck(current.deck, input.slideId, input.instanceId);
-    const next = await this.writeDeckVersion({ current, deck: result.deck, reason: result.reason, impact: impactForVisualEdit(result.affectedSlideIds, result.affectedElementIds) });
-    return { ...next, nextSelectionIds: result.nextSelectionIds, commandReason: result.reason };
+    throw new Error(`Unsupported component command: ${(input as any).command}`);
   }
 
   async setAutoLayout(input: { slideId: string; elementId: string; layout: AutoLayoutSpec; expectedDeckHash?: string }) {
