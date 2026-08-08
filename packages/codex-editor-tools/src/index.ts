@@ -28,9 +28,9 @@ export type PitchEditorCommand =
   | { command: "group"; slideId: string; elementIds: string[]; groupId?: string }
   | { command: "ungroup"; slideId: string; elementIds: string[] }
   | { command: "arrange"; slideId: string; elementIds: string[]; arrangement: ArrangeCommand }
-  | { command: "insertText"; slideId: string; geometry: Geometry; text?: string; fontSizePt?: number }
-  | { command: "insertShape"; slideId: string; geometry: Geometry; shape?: "rect" | "roundRect" | "ellipse" | "triangle"; fill?: string }
-  | { command: "insertFrame"; slideId: string; geometry: Geometry; name?: string };
+  | { command: "insertText"; slideId: string; elementIds: string[]; geometry: Geometry; text?: string; fontSizePt?: number }
+  | { command: "insertShape"; slideId: string; elementIds: string[]; geometry: Geometry; shape?: "rect" | "roundRect" | "ellipse" | "triangle"; fill?: string }
+  | { command: "insertFrame"; slideId: string; elementIds: string[]; geometry: Geometry; name?: string };
 
 export interface PitchEditorToolCall {
   name: typeof PITCH_EDITOR_TOOL_NAME;
@@ -143,16 +143,17 @@ export function buildPitchEditorToolOperations(deck: DeckDocument, args: PitchEd
       const element = createTextElement({
         geometry: args.geometry,
         zIndex: zAfter(slide),
+        origin: "agent",
         paragraphs: [{ runs: [{ text: args.text ?? "Text", fontSizePt: args.fontSizePt ?? 24, color: "#111111" }] }],
       });
       return { operations: [{ op: "addElement", slideId: slide.id, element }], nextSelectionIds: [element.id] };
     }
     case "insertShape": {
-      const element = createShapeElement({ geometry: args.geometry, zIndex: zAfter(slide), shape: args.shape ?? "rect", fill: args.fill ?? "#E9EDF2" });
+      const element = createShapeElement({ geometry: args.geometry, zIndex: zAfter(slide), origin: "agent", shape: args.shape ?? "rect", fill: args.fill ?? "#E9EDF2" });
       return { operations: [{ op: "addElement", slideId: slide.id, element }], nextSelectionIds: [element.id] };
     }
     case "insertFrame": {
-      const element = createFrameElement({ geometry: args.geometry, zIndex: zAfter(slide), name: args.name ?? "Frame" });
+      const element = createFrameElement({ geometry: args.geometry, zIndex: zAfter(slide), origin: "agent", name: args.name ?? "Frame" });
       return { operations: [{ op: "addElement", slideId: slide.id, element }], nextSelectionIds: [element.id] };
     }
   }
