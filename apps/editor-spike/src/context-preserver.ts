@@ -27,7 +27,9 @@ export function installPitchContextPreserver(): void {
     await originalReload();
     restoreSlide(slideId);
     const existing = new Set(
-      Array.from(document.querySelectorAll<HTMLElement>("[data-el]")).map((node) => node.dataset.el).filter((id): id is string => Boolean(id)),
+      Array.from(document.querySelectorAll<HTMLElement>("#spikeScene [data-id]"))
+        .map((node) => node.dataset.id)
+        .filter((id): id is string => Boolean(id)),
     );
     editor.select(selectedIds.filter((id) => existing.has(id)));
   };
