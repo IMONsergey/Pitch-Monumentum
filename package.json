@@ -15,19 +15,22 @@
     "demo": "npm run build && node dist/apps/cli/src/index.js demo .pitch-demo",
     "status": "npm run build && node dist/apps/cli/src/index.js status .pitch-demo",
     "serve": "npm run build && node dist/apps/demo/src/server.js .pitch-demo 4173",
-    "workspace": "npm run build && node dist/apps/workspace/src/server.js .pitch-demo 4173"
+    "workspace": "npm run build && node dist/apps/workspace/src/server.js .pitch-demo 4173",
+    "pitch:mcp": "npm run build && node dist/apps/pitch-mcp/src/server.js .pitch-demo"
   },
   "dependencies": {
     "@lexical/history": "^0.48.0",
     "@lexical/list": "^0.48.0",
     "@lexical/rich-text": "^0.48.0",
     "@lexical/selection": "^0.48.0",
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "@scena/guides": "^0.29.2",
     "infinite-viewer": "^0.29.1",
     "lexical": "^0.48.0",
     "moveable": "^0.53.0",
     "selecto": "^1.26.3",
-    "yoga-layout": "^3.2.1"
+    "yoga-layout": "^3.2.1",
+    "zod": "^4.2.0"
   },
   "devDependencies": {
     "@types/node": "^22.20.1",
