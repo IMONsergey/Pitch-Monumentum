@@ -1,1 +1,1 @@
-import "../../desktop-next/src/main.js";
+import "../../desktop-runtime/src/main.js";
