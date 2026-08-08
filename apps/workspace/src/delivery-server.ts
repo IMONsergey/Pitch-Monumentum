@@ -3,6 +3,7 @@ import { readFile, stat } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
 import { createReviewWorkspaceServer } from "./review-server.js";
 import { DeliveryRuntime, type DeliveryFormat, type DeliveryManifest } from "../../delivery/src/runtime.js";
+import { SystemHealthRuntime } from "../../system-health/src/runtime.js";
 import type { ReviewDeliveryPolicy } from "../../../packages/review-engine/src/delivery.js";
 import { inspectFilesystemArtifact } from "../../../packages/fs-artifact/src/index.js";
 
@@ -18,7 +19,7 @@ async function body(req: IncomingMessage, limit = 1024 * 1024): Promise<any> {
 }
 
 async function editorBundle(): Promise<string> {
-  const names = ["editor-spike.js", "design-system-ui.js", "slide-masters-ui.js", "creative-director-ui.js", "creative-preview-ui.js", "creative-runs-ui.js", "versions-ui.js", "review-ui.js", "review-governance-ui.js", "delivery-ui.js"];
+  const names = ["editor-spike.js", "design-system-ui.js", "slide-masters-ui.js", "creative-director-ui.js", "creative-preview-ui.js", "creative-runs-ui.js", "versions-ui.js", "review-ui.js", "review-governance-ui.js", "delivery-ui.js", "system-health-ui.js"];
   const parts = await Promise.all(names.map((name) => readFile(resolve("apps", "workspace", "public", name), "utf8")));
   return `${parts.join("\n;\n")}\n`;
 }
@@ -37,6 +38,7 @@ export function createDeliveryWorkspaceServer(projectRoot: string) {
   const root = resolve(projectRoot);
   const inner = createReviewWorkspaceServer(root);
   const delivery = new DeliveryRuntime(root);
+  const health = new SystemHealthRuntime(root, { service: inner.service, delivery, review: inner.review, versions: inner.versions, director: inner.director });
   const exportDir = join(root, ".project", "exports");
 
   const server = createServer(async (req, res) => {
@@ -44,6 +46,9 @@ export function createDeliveryWorkspaceServer(projectRoot: string) {
       const url = new URL(req.url ?? "/", "http://local");
       if (req.method === "GET" && url.pathname === "/editor-spike.js") {
         res.writeHead(200, { "content-type": "text/javascript; charset=utf-8", "cache-control": "no-store" }); res.end(await editorBundle()); return;
+      }
+      if (req.method === "GET" && url.pathname === "/api/system-health") {
+        json(res, 200, await health.snapshot()); return;
       }
       if (req.method === "GET" && url.pathname === "/api/delivery-state") {
         json(res, 200, await delivery.preflight()); return;
@@ -108,7 +113,7 @@ export function createDeliveryWorkspaceServer(projectRoot: string) {
       json(res, 400, { error: error instanceof Error ? error.message : String(error) });
     }
   });
-  return { server, service: inner.service, review: inner.review, versions: inner.versions, director: inner.director, delivery };
+  return { server, service: inner.service, review: inner.review, versions: inner.versions, director: inner.director, delivery, health };
 }
 
 if (process.argv[1]?.endsWith("delivery-server.js")) {
