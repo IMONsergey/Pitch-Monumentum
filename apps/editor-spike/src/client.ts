@@ -7,6 +7,7 @@ type AnyRecord = Record<string, any>;
 type ProjectState = AnyRecord & { deck: AnyRecord; deckHash: string };
 type VendorInstance = any;
 type VendorConstructor = new (...args: any[]) => VendorInstance;
+type Geometry = { x: number; y: number; width: number; height: number; rotation?: number };
 
 function vendorConstructor(module: AnyRecord): VendorConstructor {
   return (module.default ?? module) as VendorConstructor;
@@ -26,6 +27,9 @@ const state: {
   viewer: VendorInstance | null;
   horizontalGuide: VendorInstance | null;
   verticalGuide: VendorInstance | null;
+  baseGeometry: Record<string, Geometry>;
+  previewGeometry: Record<string, Geometry>;
+  interactionKind: string | null;
 } = {
   project: null,
   slideId: null,
@@ -35,7 +39,22 @@ const state: {
   viewer: null,
   horizontalGuide: null,
   verticalGuide: null,
+  baseGeometry: {},
+  previewGeometry: {},
+  interactionKind: null,
 };
+
+const debug: AnyRecord = {
+  dragStarts: 0,
+  dragEvents: 0,
+  dragEnds: 0,
+  resizeEvents: 0,
+  rotateEvents: 0,
+  lastDist: null,
+  lastPreview: null,
+  lastCommitOperations: 0,
+};
+(window as any).__pitchEditorDebug = debug;
 
 const $ = <T extends Element = HTMLElement>(selector: string) => document.querySelector(selector) as T;
 const esc = (value: unknown) => String(value ?? "").replace(/[&<>\"]/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '\"': "&quot;" })[char] ?? char);
@@ -49,6 +68,10 @@ async function api(path: string, options: RequestInit = {}): Promise<any> {
 
 function currentSlide(): AnyRecord | undefined {
   return state.project?.deck.slides.find((slide: AnyRecord) => slide.id === state.slideId) ?? state.project?.deck.slides[0];
+}
+
+function sceneElement(elementId: string): AnyRecord | undefined {
+  return currentSlide()?.scene.find((element: AnyRecord) => element.id === elementId);
 }
 
 function styleFor(element: AnyRecord): string {
@@ -110,6 +133,43 @@ function selectedTargets(): HTMLElement[] {
   return state.selectedIds.map((id) => document.querySelector<HTMLElement>(`#spikeScene [data-id="${CSS.escape(id)}"]`)).filter((element): element is HTMLElement => Boolean(element));
 }
 
+function beginInteraction(kind: string): void {
+  state.interactionKind = kind;
+  state.baseGeometry = {};
+  state.previewGeometry = {};
+  for (const id of state.selectedIds) {
+    const model = sceneElement(id);
+    if (!model) continue;
+    const geometry: Geometry = structuredClone(model.geometry);
+    state.baseGeometry[id] = geometry;
+    state.previewGeometry[id] = structuredClone(geometry);
+  }
+  $("#spikeStatus").textContent = `${kind} preview · ${Object.keys(state.baseGeometry).length} object(s)`;
+}
+
+function resetInteraction(): void {
+  state.baseGeometry = {};
+  state.previewGeometry = {};
+  state.interactionKind = null;
+}
+
+function applyGeometryPreview(elementId: string, changes: Partial<Geometry>): void {
+  const base = state.baseGeometry[elementId] ?? sceneElement(elementId)?.geometry;
+  if (!base) return;
+  const geometry: Geometry = { ...base, ...(state.previewGeometry[elementId] ?? {}), ...changes };
+  state.previewGeometry[elementId] = geometry;
+  const node = document.querySelector<HTMLElement>(`#spikeScene [data-id="${CSS.escape(elementId)}"]`);
+  if (node) {
+    node.style.left = `${geometry.x}px`;
+    node.style.top = `${geometry.y}px`;
+    node.style.width = `${Math.max(1, geometry.width)}px`;
+    node.style.height = `${Math.max(1, geometry.height)}px`;
+    node.dataset.rotation = String(geometry.rotation ?? 0);
+    node.style.transform = `rotate(${geometry.rotation ?? 0}deg)`;
+  }
+  debug.lastPreview = { elementId, ...geometry };
+}
+
 function updateSelection(ids: string[]): void {
   state.selectedIds = [...new Set(ids)];
   document.querySelectorAll<HTMLElement>("#spikeScene .selectable").forEach((element) => element.classList.toggle("selected", state.selectedIds.includes(element.dataset.id ?? "")));
@@ -120,32 +180,47 @@ function updateSelection(ids: string[]): void {
   $("#spikeSelection").textContent = state.selectedIds.length ? `${state.selectedIds.length} selected · ${state.selectedIds.join(", ")}` : "Nothing selected";
 }
 
-function geometryFromNode(node: HTMLElement): AnyRecord {
-  return {
-    x: Math.round(parseFloat(node.style.left) || 0),
-    y: Math.round(parseFloat(node.style.top) || 0),
-    width: Math.round(parseFloat(node.style.width) || node.offsetWidth),
-    height: Math.round(parseFloat(node.style.height) || node.offsetHeight),
-    rotation: Math.round(parseFloat(node.dataset.rotation || "0") || 0),
-  };
+function geometryChanged(a: Geometry, b: Geometry): boolean {
+  return a.x !== b.x || a.y !== b.y || a.width !== b.width || a.height !== b.height || (a.rotation ?? 0) !== (b.rotation ?? 0);
 }
 
-async function commitSelection(reason: string): Promise<void> {
+async function commitInteraction(reason: string): Promise<void> {
   const slide = currentSlide();
   if (!slide || !state.project || !state.selectedIds.length) return;
-  const operations = selectedTargets().map((node) => ({
+  const entries = Object.entries(state.previewGeometry).filter(([id, geometry]) => {
+    const base = state.baseGeometry[id];
+    return base && geometryChanged(base, geometry);
+  });
+  debug.lastCommitOperations = entries.length;
+  if (!entries.length) {
+    $("#spikeStatus").textContent = `${reason} ended without geometry delta`;
+    resetInteraction();
+    return;
+  }
+  const operations = entries.map(([elementId, geometry]) => ({
     op: "updateGeometry",
     slideId: slide.id,
-    elementId: node.dataset.id,
-    geometry: geometryFromNode(node),
+    elementId,
+    geometry,
   }));
   $("#spikeStatus").textContent = `Committing ${operations.length} scoped transform(s)…`;
   state.project = await api("/api/mutate", {
     method: "POST",
     body: JSON.stringify({ reason, operations, expectedDeckHash: state.project.deckHash }),
   });
+  resetInteraction();
   renderAll();
   $("#spikeStatus").textContent = `${reason} committed through DeckMutation · artifact version updated`;
+}
+
+function installDirectSelectedTargetHandoff(scene: HTMLElement): void {
+  scene.addEventListener("mousedown", (event: MouseEvent) => {
+    if (event.button !== 0 || !state.moveable || !state.selectedIds.length) return;
+    const target = (event.target as Element | null)?.closest<HTMLElement>(".selectable");
+    if (!target || !state.selectedIds.includes(target.dataset.id ?? "")) return;
+    event.stopPropagation();
+    state.moveable.dragStart(event);
+  }, true);
 }
 
 function installInteractionEngine(): void {
@@ -171,56 +246,106 @@ function installInteractionEngine(): void {
   });
 
   state.moveable
-    .on("drag", ({ target, left, top }: AnyRecord) => {
-      const node = target as HTMLElement;
-      node.style.left = `${Math.round(left)}px`;
-      node.style.top = `${Math.round(top)}px`;
+    .on("dragStart", () => {
+      debug.dragStarts += 1;
+      beginInteraction("Move");
     })
-    .on("dragEnd", () => void commitSelection("Move selection"))
+    .on("drag", ({ target, beforeDist, dist }: AnyRecord) => {
+      debug.dragEvents += 1;
+      const node = target as HTMLElement;
+      const id = node.dataset.id;
+      if (!id) return;
+      const base = state.baseGeometry[id];
+      if (!base) return;
+      const distance = beforeDist ?? dist ?? [0, 0];
+      debug.lastDist = distance;
+      applyGeometryPreview(id, { x: Math.round(base.x + distance[0]), y: Math.round(base.y + distance[1]) });
+    })
+    .on("dragEnd", () => {
+      debug.dragEnds += 1;
+      void commitInteraction("Move selection");
+    })
+    .on("resizeStart", () => beginInteraction("Resize"))
     .on("resize", ({ target, width, height, drag }: AnyRecord) => {
+      debug.resizeEvents += 1;
       const node = target as HTMLElement;
-      node.style.width = `${Math.max(1, Math.round(width))}px`;
-      node.style.height = `${Math.max(1, Math.round(height))}px`;
-      if (drag) {
-        node.style.left = `${Math.round(drag.left)}px`;
-        node.style.top = `${Math.round(drag.top)}px`;
-      }
+      const id = node.dataset.id;
+      if (!id) return;
+      const base = state.baseGeometry[id];
+      if (!base) return;
+      const distance = drag?.beforeDist ?? drag?.dist ?? [0, 0];
+      applyGeometryPreview(id, {
+        x: Math.round(base.x + distance[0]),
+        y: Math.round(base.y + distance[1]),
+        width: Math.max(1, Math.round(width)),
+        height: Math.max(1, Math.round(height)),
+      });
     })
-    .on("resizeEnd", () => void commitSelection("Resize selection"))
-    .on("rotate", ({ target, beforeRotate }: AnyRecord) => {
+    .on("resizeEnd", () => void commitInteraction("Resize selection"))
+    .on("rotateStart", () => beginInteraction("Rotate"))
+    .on("rotate", ({ target, rotation, beforeRotation, drag }: AnyRecord) => {
+      debug.rotateEvents += 1;
       const node = target as HTMLElement;
-      node.dataset.rotation = String(beforeRotate);
-      node.style.transform = `rotate(${beforeRotate}deg)`;
+      const id = node.dataset.id;
+      if (!id) return;
+      const base = state.baseGeometry[id];
+      if (!base) return;
+      const distance = drag?.beforeDist ?? drag?.dist ?? [0, 0];
+      applyGeometryPreview(id, {
+        x: Math.round(base.x + distance[0]),
+        y: Math.round(base.y + distance[1]),
+        rotation: Math.round(rotation ?? beforeRotation ?? base.rotation ?? 0),
+      });
     })
-    .on("rotateEnd", () => void commitSelection("Rotate selection"))
+    .on("rotateEnd", () => void commitInteraction("Rotate selection"))
+    .on("dragGroupStart", () => beginInteraction("Move group"))
     .on("dragGroup", ({ events }: AnyRecord) => {
-      events.forEach(({ target, left, top }: AnyRecord) => {
-        const node = target as HTMLElement;
-        node.style.left = `${Math.round(left)}px`;
-        node.style.top = `${Math.round(top)}px`;
+      events.forEach((child: AnyRecord) => {
+        const node = child.target as HTMLElement;
+        const id = node.dataset.id;
+        if (!id) return;
+        const base = state.baseGeometry[id];
+        if (!base) return;
+        const distance = child.beforeDist ?? child.dist ?? [0, 0];
+        applyGeometryPreview(id, { x: Math.round(base.x + distance[0]), y: Math.round(base.y + distance[1]) });
       });
     })
-    .on("dragGroupEnd", () => void commitSelection("Move selection group"))
+    .on("dragGroupEnd", () => void commitInteraction("Move selection group"))
+    .on("resizeGroupStart", () => beginInteraction("Resize group"))
     .on("resizeGroup", ({ events }: AnyRecord) => {
-      events.forEach(({ target, width, height, drag }: AnyRecord) => {
-        const node = target as HTMLElement;
-        node.style.width = `${Math.max(1, Math.round(width))}px`;
-        node.style.height = `${Math.max(1, Math.round(height))}px`;
-        if (drag) {
-          node.style.left = `${Math.round(drag.left)}px`;
-          node.style.top = `${Math.round(drag.top)}px`;
-        }
+      events.forEach((child: AnyRecord) => {
+        const node = child.target as HTMLElement;
+        const id = node.dataset.id;
+        if (!id) return;
+        const base = state.baseGeometry[id];
+        if (!base) return;
+        const distance = child.drag?.beforeDist ?? child.drag?.dist ?? [0, 0];
+        applyGeometryPreview(id, {
+          x: Math.round(base.x + distance[0]),
+          y: Math.round(base.y + distance[1]),
+          width: Math.max(1, Math.round(child.width)),
+          height: Math.max(1, Math.round(child.height)),
+        });
       });
     })
-    .on("resizeGroupEnd", () => void commitSelection("Resize selection group"))
+    .on("resizeGroupEnd", () => void commitInteraction("Resize selection group"))
+    .on("rotateGroupStart", () => beginInteraction("Rotate group"))
     .on("rotateGroup", ({ events }: AnyRecord) => {
-      events.forEach(({ target, beforeRotate }: AnyRecord) => {
-        const node = target as HTMLElement;
-        node.dataset.rotation = String(beforeRotate);
-        node.style.transform = `rotate(${beforeRotate}deg)`;
+      events.forEach((child: AnyRecord) => {
+        const node = child.target as HTMLElement;
+        const id = node.dataset.id;
+        if (!id) return;
+        const base = state.baseGeometry[id];
+        if (!base) return;
+        const distance = child.drag?.beforeDist ?? child.drag?.dist ?? [0, 0];
+        applyGeometryPreview(id, {
+          x: Math.round(base.x + distance[0]),
+          y: Math.round(base.y + distance[1]),
+          rotation: Math.round(child.rotation ?? child.beforeRotation ?? base.rotation ?? 0),
+        });
       });
     })
-    .on("rotateGroupEnd", () => void commitSelection("Rotate selection group"));
+    .on("rotateGroupEnd", () => void commitInteraction("Rotate selection group"));
 
   state.selecto = new Selecto({
     container: stage,
@@ -231,17 +356,26 @@ function installInteractionEngine(): void {
     toggleContinueSelect: "shift",
     hitRate: 20,
   });
-  state.selecto.on("selectEnd", (event: AnyRecord) => {
-    const ids = (event.selected as Element[]).map((element) => (element as HTMLElement).dataset.id).filter((id): id is string => Boolean(id));
-    if (event.isDragStart && event.inputEvent && state.moveable) {
-      event.inputEvent.preventDefault?.();
-      const handoff = state.moveable.waitToChangeTarget?.();
+  state.selecto
+    .on("dragStart", (event: AnyRecord) => {
+      const target = event.inputEvent?.target as Node | null;
+      if (!target) return;
+      const selected = selectedTargets();
+      if (state.moveable?.isMoveableElement?.(target) || selected.some((element) => element === target || element.contains(target))) event.stop();
+    })
+    .on("selectEnd", (event: AnyRecord) => {
+      const ids = (event.selected as Element[]).map((element) => (element as HTMLElement).dataset.id).filter((id): id is string => Boolean(id));
+      if (event.isDragStart && event.inputEvent && state.moveable) {
+        event.inputEvent.preventDefault?.();
+        const handoff = state.moveable.waitToChangeTarget?.();
+        updateSelection(ids);
+        Promise.resolve(handoff).then(() => state.moveable?.dragStart(event.inputEvent));
+        return;
+      }
       updateSelection(ids);
-      Promise.resolve(handoff).then(() => state.moveable?.dragStart(event.inputEvent));
-      return;
-    }
-    updateSelection(ids);
-  });
+    });
+
+  installDirectSelectedTargetHandoff(scene);
 }
 
 function installViewportAndGuides(): void {
