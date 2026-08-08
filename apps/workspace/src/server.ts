@@ -6,6 +6,7 @@ import type { AutoLayoutSpec, DeckDocument } from "../../../packages/deck-model/
 import { applyDeckMutation, createMutation, deckHash, type DeckMutationOperation } from "../../../packages/mutations/src/index.js";
 import { setAutoLayoutMutationOperations, wrapSelectionInAutoLayoutOperations } from "../../../packages/auto-layout/src/index.js";
 import { executeEditorCommand, type EditorCommandInput } from "../../../packages/editor-commands/src/service.js";
+import { executeSlideCommand, isSlideCommand, type SlideCommandInput } from "../../../packages/slide-commands/src/index.js";
 import { runDeterministicQA } from "../../../packages/qa/src/index.js";
 import { exportProductionPptx } from "../../../packages/export-pipeline/src/index.js";
 import { VersionJournal } from "../../../packages/version-history/src/index.js";
@@ -28,7 +29,7 @@ async function staticAsset(name: "workspace.css" | "workspace.js" | "editor-spik
   return readFile(resolve("apps", "workspace", "public", name), "utf8");
 }
 
-type EditorCommandRequest = EditorCommandInput & { expectedDeckHash?: string };
+type EditorCommandRequest = (EditorCommandInput | SlideCommandInput) & { expectedDeckHash?: string };
 
 export class PitchWorkspaceService {
   readonly root: string;
@@ -51,20 +52,49 @@ export class PitchWorkspaceService {
     return { manifest, deck, deckHash: deckHash(deck), qa, history };
   }
 
-  async mutate(input: { reason?: string; operations: DeckMutationOperation[]; expectedDeckHash?: string }) {
-    const current = await this.state();
-    const head = activeHeadByKind(current.manifest, "deck")!;
-    await this.journal.record(current.manifest.activeBranchId, head);
-    const mutation = createMutation(input.reason ?? "Workspace edit", input.operations, "user", input.expectedDeckHash);
-    const applied = applyDeckMutation(current.deck, mutation);
-    const deckArtifact = await this.store.write({ id: head.id, kind: "deck", payload: applied.deck, producer: { type: "user" }, inputs: [head] });
-    await this.journal.record(current.manifest.activeBranchId, { id: deckArtifact.id, kind: deckArtifact.kind, version: deckArtifact.version, contentHash: deckArtifact.contentHash, status: deckArtifact.status });
-    const qa = runDeterministicQA(applied.deck);
+  private async writeDeckVersion(input: {
+    current: Awaited<ReturnType<PitchWorkspaceService["state"]>>;
+    deck: DeckDocument;
+    reason: string;
+    impact: unknown;
+    producer?: "user" | "deterministic";
+  }) {
+    const head = activeHeadByKind(input.current.manifest, "deck")!;
+    await this.journal.record(input.current.manifest.activeBranchId, head);
+    const deckArtifact = await this.store.write({
+      id: head.id,
+      kind: "deck",
+      payload: input.deck,
+      producer: { type: input.producer ?? "user" },
+      inputs: [head],
+    });
+    await this.journal.record(input.current.manifest.activeBranchId, {
+      id: deckArtifact.id,
+      kind: deckArtifact.kind,
+      version: deckArtifact.version,
+      contentHash: deckArtifact.contentHash,
+      status: deckArtifact.status,
+    });
+    const qa = runDeterministicQA(input.deck);
     await this.store.write({
-      id: "qa_current", kind: "qa", payload: { deckId: applied.deck.id, issues: qa, mutationId: mutation.id, impact: applied.impact },
-      producer: { type: "deterministic" }, inputs: [deckArtifact], status: qa.some((issue) => issue.severity === "critical") ? "needsReview" : "ready"
+      id: "qa_current",
+      kind: "qa",
+      payload: { deckId: input.deck.id, issues: qa, reason: input.reason, impact: input.impact },
+      producer: { type: "deterministic" },
+      inputs: [deckArtifact],
+      status: qa.some((issue) => issue.severity === "critical") ? "needsReview" : "ready",
     });
     return this.state();
+  }
+
+  async mutate(input: { reason?: string; operations: DeckMutationOperation[]; expectedDeckHash?: string }) {
+    const current = await this.state();
+    if (input.expectedDeckHash && input.expectedDeckHash !== current.deckHash) {
+      throw new Error(`Deck changed since mutation was authored: expected ${input.expectedDeckHash}, got ${current.deckHash}`);
+    }
+    const mutation = createMutation(input.reason ?? "Workspace edit", input.operations, "user", current.deckHash);
+    const applied = applyDeckMutation(current.deck, mutation);
+    return this.writeDeckVersion({ current, deck: applied.deck, reason: mutation.reason, impact: applied.impact });
   }
 
   async editorCommand(input: EditorCommandRequest) {
@@ -72,6 +102,31 @@ export class PitchWorkspaceService {
     if (input.expectedDeckHash && input.expectedDeckHash !== current.deckHash) {
       throw new Error(`Deck changed since editor command was authored: expected ${input.expectedDeckHash}, got ${current.deckHash}`);
     }
+
+    if (isSlideCommand(input)) {
+      const executed = executeSlideCommand(current.deck, input);
+      const next = await this.writeDeckVersion({
+        current,
+        deck: executed.deck,
+        reason: executed.reason,
+        impact: {
+          affectedSlideIds: executed.affectedSlideIds,
+          affectedElementIds: [],
+          staleArtifacts: ["storyboard", "qa:narrative", "qa:evidence", "qa:visual", "qa:readability", "export"],
+          narrativeChanged: true,
+          evidenceRisk: input.command === "deleteSlide",
+          slideOrderChanged: input.command !== "renameSlide",
+        },
+      });
+      return {
+        ...next,
+        nextSelectionIds: [],
+        nextSlideId: executed.nextSlideId,
+        reflowedContainerIds: [],
+        commandReason: executed.reason,
+      };
+    }
+
     const executed = executeEditorCommand(current.deck, input);
     if (!executed.operations.length) {
       return {
@@ -82,11 +137,7 @@ export class PitchWorkspaceService {
         clipboard: executed.clipboard,
       };
     }
-    const next = await this.mutate({
-      reason: executed.reason,
-      operations: executed.operations,
-      expectedDeckHash: current.deckHash,
-    });
+    const next = await this.mutate({ reason: executed.reason, operations: executed.operations, expectedDeckHash: current.deckHash });
     return {
       ...next,
       nextSelectionIds: executed.nextSelectionIds,
