@@ -16,8 +16,10 @@ export interface RichAsset {
   mimeType?: "image/png" | "image/jpeg";
 }
 
+export type RichAssetMap = Record<string, RichAsset>;
+
 export interface RichCompileOptions {
-  assets: Record<string, RichAsset>;
+  assets: RichAssetMap;
 }
 
 export interface RichPptxCompileResult extends PptxCompileResult {
