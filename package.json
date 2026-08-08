@@ -10,6 +10,7 @@
     "build:editor-spike": "esbuild apps/editor-spike/src/client.ts --bundle --format=iife --platform=browser --target=es2022 --outfile=apps/workspace/public/editor-spike.js",
     "build": "tsc -p tsconfig.build.json && npm run build:editor-spike",
     "test": "npm run build && node --test dist/tests/*.test.js",
+    "test:editor-e2e": "npm run build && node dist/tests/editor-spike.e2e.js",
     "check": "npm run typecheck && npm run test",
     "demo": "npm run build && node dist/apps/cli/src/index.js demo .pitch-demo",
     "status": "npm run build && node dist/apps/cli/src/index.js status .pitch-demo",
@@ -24,6 +25,7 @@
   },
   "devDependencies": {
     "esbuild": "^0.25.0",
+    "playwright": "^1.62.0",
     "typescript": "^5.8.3"
   }
 }
