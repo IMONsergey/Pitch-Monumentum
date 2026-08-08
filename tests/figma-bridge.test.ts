@@ -33,6 +33,24 @@ test("Figma bridge retains editable node identity hierarchy rich text and media 
   assert.equal(bridge.assets.asset_img.base64, "AA==");
 });
 
+test("pathData-only custom vectors are materialized into importer-ready SVG paths", () => {
+  const deck = fixture();
+  deck.slides[0].scene.push({
+    id: "vector", type: "shape", shape: "custom", fill: "#00AA88", semanticRole: "visual",
+    geometry: { x: 1050, y: 160, width: 300, height: 220 }, zIndex: 4, origin: "user", exportStrategy: "native", dependencies: [],
+    pathData: { fillRule: "evenodd", commands: [
+      { command: "M", x: 0, y: 0 },
+      { command: "L", x: 120, y: 0 },
+      { command: "Q", x1: 170, y1: 70, x: 120, y: 150 },
+      { command: "Z" },
+    ] },
+  } as any);
+  const bridge = createFigmaBridgeDocument(deck, { asset_img: { assetId: "asset_img", mimeType: "image/png", base64: "AA==" } });
+  const vector = bridge.slides[0].nodes.find((node) => node.pitchId === "vector")!;
+  assert.equal(vector.payload.svgPath, "M0 0 L120 0 Q170 70 120 150 Z");
+  assert.deepEqual((vector.payload.pathData as any).fillRule, "evenodd");
+});
+
 test("bridge warns instead of silently flattening structured chart/table/diagram content", () => {
   const deck = fixture();
   deck.slides[0].scene.push({ id: "table", type: "table", rows: [[{ text: "A" }]], semanticRole: "table", geometry: { x: 1000, y: 350, width: 500, height: 250 }, zIndex: 4, origin: "user", exportStrategy: "native", dependencies: [] } as any);
