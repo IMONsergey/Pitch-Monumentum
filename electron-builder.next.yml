@@ -1,0 +1,23 @@
+appId: com.imon.pitchmonumentum.next
+productName: Pitch Monumentum
+electronVersion: 39.2.6
+asar: false
+npmRebuild: false
+directories:
+  output: dist-desktop-next
+files:
+  - dist/**/*
+  - apps/workspace/public/**/*
+  - package.json
+extraMetadata:
+  main: dist/apps/desktop-next/src/main.js
+mac:
+  category: public.app-category.productivity
+  target:
+    - target: dmg
+      arch:
+        - x64
+  identity: null
+  hardenedRuntime: false
+  gatekeeperAssess: false
+artifactName: Pitch-Monumentum-Next-${version}-mac-x64.${ext}
