@@ -1,4 +1,4 @@
-import type { DeckDocument, Geometry, SceneElement, SlideDocument } from "../../deck-model/src/index.js";
+import type { DeckDocument, Geometry, SceneElement, SlideDocument, TextRun } from "../../deck-model/src/index.js";
 import { autoLayoutMutationOperations } from "../../auto-layout/src/index.js";
 import { applyDeckMutation, createMutation, type DeckMutationOperation } from "../../mutations/src/index.js";
 import {
@@ -13,6 +13,7 @@ import {
   duplicateSelection,
   groupSelection,
   nudgeSelection,
+  parentMap,
   pasteClipboard,
   selectionRoots,
   ungroupSelection,
@@ -35,6 +36,9 @@ export type EditorCommandInput =
   | { command: "copy"; slideId: string; selectedIds: string[] }
   | { command: "paste"; slideId: string; clipboard: PitchClipboardPayload; offsetDU?: number }
   | { command: "lock"; slideId: string; selectedIds: string[]; locked: boolean }
+  | { command: "setGeometry"; slideId: string; elementId: string; geometry: Partial<Geometry> }
+  | { command: "setPresentation"; slideId: string; elementId: string; changes: { name?: string; opacity?: number; locked?: boolean } }
+  | { command: "setTextStyle"; slideId: string; elementId: string; style: Partial<Pick<TextRun, "fontFamily" | "fontSizePt" | "color" | "bold" | "italic" | "underline" | "letterSpacingPt">> }
   | { command: "insertText"; slideId: string; geometry: Geometry; text?: string }
   | { command: "insertShape"; slideId: string; geometry: Geometry; shape?: "rect" | "roundRect" | "ellipse" | "triangle"; fill?: string }
   | { command: "insertFrame"; slideId: string; geometry: Geometry; fill?: string };
@@ -53,6 +57,12 @@ function slideById(deck: DeckDocument, slideId: string): SlideDocument {
   return slide;
 }
 
+function elementById(slide: SlideDocument, elementId: string): SceneElement {
+  const element = slide.scene.find((item) => item.id === elementId);
+  if (!element) throw new Error(`Unknown element ${elementId} on slide ${slide.id}`);
+  return element;
+}
+
 function maxZ(slide: SlideDocument): number {
   return Math.max(0, ...slide.scene.map((element) => element.zIndex));
 }
@@ -63,6 +73,25 @@ function resultForInsert(element: SceneElement): EditorCommandResult {
     nextSelectionIds: [element.id],
     affectedAutoLayoutContainerIds: [],
   };
+}
+
+function layoutParentIds(slide: SlideDocument, elementId: string): string[] {
+  const parentId = parentMap(slide).get(elementId);
+  if (!parentId) return [];
+  const parent = slide.scene.find((element) => element.id === parentId);
+  return parent && (parent.type === "frame" || parent.type === "group") && parent.layout ? [parentId] : [];
+}
+
+function finiteGeometryPatch(patch: Partial<Geometry>): Partial<Geometry> {
+  const result: Partial<Geometry> = {};
+  for (const key of ["x", "y", "width", "height", "rotation"] as const) {
+    const value = patch[key];
+    if (value === undefined) continue;
+    if (!Number.isFinite(value)) throw new Error(`${key} must be finite`);
+    if ((key === "width" || key === "height") && value <= 0) throw new Error(`${key} must be greater than zero`);
+    result[key] = value;
+  }
+  return result;
 }
 
 function dispatch(slide: SlideDocument, input: Exclude<EditorCommandInput, { command: "copy" }>): EditorCommandResult {
@@ -79,39 +108,57 @@ function dispatch(slide: SlideDocument, input: Exclude<EditorCommandInput, { com
     case "lock": {
       const roots = selectionRoots(slide, input.selectedIds);
       return {
-        operations: roots.map((elementId) => ({
-          op: "updateElementPresentation" as const,
-          slideId: slide.id,
-          elementId,
-          changes: { locked: input.locked },
-        })),
+        operations: roots.map((elementId) => ({ op: "updateElementPresentation" as const, slideId: slide.id, elementId, changes: { locked: input.locked } })),
         nextSelectionIds: input.locked ? [] : roots,
         affectedAutoLayoutContainerIds: [],
       };
     }
+    case "setGeometry": {
+      elementById(slide, input.elementId);
+      return {
+        operations: [{ op: "updateGeometry", slideId: slide.id, elementId: input.elementId, geometry: finiteGeometryPatch(input.geometry) }],
+        nextSelectionIds: [input.elementId],
+        affectedAutoLayoutContainerIds: layoutParentIds(slide, input.elementId),
+      };
+    }
+    case "setPresentation": {
+      elementById(slide, input.elementId);
+      const changes = { ...input.changes };
+      if (changes.opacity !== undefined) {
+        if (!Number.isFinite(changes.opacity)) throw new Error("opacity must be finite");
+        changes.opacity = Math.max(0, Math.min(1, changes.opacity));
+      }
+      return {
+        operations: [{ op: "updateElementPresentation", slideId: slide.id, elementId: input.elementId, changes }],
+        nextSelectionIds: changes.locked ? [] : [input.elementId],
+        affectedAutoLayoutContainerIds: [],
+      };
+    }
+    case "setTextStyle": {
+      const element = elementById(slide, input.elementId);
+      if (element.type !== "text") throw new Error(`Element ${input.elementId} is not text`);
+      if (input.style.fontSizePt !== undefined && (!Number.isFinite(input.style.fontSizePt) || input.style.fontSizePt <= 0)) throw new Error("fontSizePt must be greater than zero");
+      if (input.style.letterSpacingPt !== undefined && !Number.isFinite(input.style.letterSpacingPt)) throw new Error("letterSpacingPt must be finite");
+      const paragraphs = element.paragraphs.map((paragraph) => ({
+        ...paragraph,
+        runs: paragraph.runs.map((run) => ({ ...run, ...input.style })),
+      }));
+      return {
+        operations: [{ op: "replaceText", slideId: slide.id, elementId: input.elementId, paragraphs }],
+        nextSelectionIds: [input.elementId],
+        affectedAutoLayoutContainerIds: layoutParentIds(slide, input.elementId),
+      };
+    }
     case "insertText": {
-      const element = createTextElement({
-        geometry: input.geometry,
-        zIndex: maxZ(slide) + 1,
-        paragraphs: [{ runs: [{ text: input.text ?? "Text", fontSizePt: 24, color: "#111111" }] }],
-      });
+      const element = createTextElement({ geometry: input.geometry, zIndex: maxZ(slide) + 1, paragraphs: [{ runs: [{ text: input.text ?? "Text", fontSizePt: 24, color: "#111111" }] }] });
       return resultForInsert(element);
     }
     case "insertShape": {
-      const element = createShapeElement({
-        geometry: input.geometry,
-        zIndex: maxZ(slide) + 1,
-        shape: input.shape ?? "rect",
-        fill: input.fill ?? "#E9EDF2",
-      });
+      const element = createShapeElement({ geometry: input.geometry, zIndex: maxZ(slide) + 1, shape: input.shape ?? "rect", fill: input.fill ?? "#E9EDF2" });
       return resultForInsert(element);
     }
     case "insertFrame": {
-      const element = createFrameElement({
-        geometry: input.geometry,
-        zIndex: maxZ(slide) + 1,
-        fill: input.fill,
-      });
+      const element = createFrameElement({ geometry: input.geometry, zIndex: maxZ(slide) + 1, fill: input.fill });
       return resultForInsert(element);
     }
   }
@@ -130,6 +177,9 @@ function reasonFor(input: EditorCommandInput): string {
     case "copy": return "Copy Pitch selection";
     case "paste": return "Paste Pitch clipboard";
     case "lock": return input.locked ? "Lock selection" : "Unlock selection";
+    case "setGeometry": return `Set geometry ${input.elementId}`;
+    case "setPresentation": return `Set presentation ${input.elementId}`;
+    case "setTextStyle": return `Set text style ${input.elementId}`;
     case "insertText": return "Insert text";
     case "insertShape": return "Insert shape";
     case "insertFrame": return "Insert frame";
@@ -141,26 +191,13 @@ export function executeEditorCommand(deck: DeckDocument, input: EditorCommandInp
 
   if (input.command === "copy") {
     const clipboard = copySelection(slide, input.selectedIds);
-    return {
-      reason: reasonFor(input),
-      operations: [],
-      nextSelectionIds: clipboard.rootIds,
-      reflowedContainerIds: [],
-      clipboard,
-    };
+    return { reason: reasonFor(input), operations: [], nextSelectionIds: clipboard.rootIds, reflowedContainerIds: [], clipboard };
   }
 
   const command = dispatch(slide, input);
-  const operations = command.operations.map((operation) => operation.op === "addElement"
-    ? { ...operation, slideId: input.slideId }
-    : operation);
+  const operations = command.operations.map((operation) => operation.op === "addElement" ? { ...operation, slideId: input.slideId } : operation);
+  if (!operations.length) return { reason: reasonFor(input), operations: [], nextSelectionIds: command.nextSelectionIds, reflowedContainerIds: [] };
 
-  if (!operations.length) {
-    return { reason: reasonFor(input), operations: [], nextSelectionIds: command.nextSelectionIds, reflowedContainerIds: [] };
-  }
-
-  // Apply the command to an in-memory preview using the exact same mutation engine.
-  // This makes hierarchy/reparent rules identical for UI, Codex and final persistence.
   const preview = applyDeckMutation(deck, createMutation(`Preview ${reasonFor(input)}`, operations, "deterministic")).deck;
   const previewSlide = slideById(preview, input.slideId);
   const reflowedContainerIds: string[] = [];
@@ -173,10 +210,5 @@ export function executeEditorCommand(deck: DeckDocument, input: EditorCommandInp
     reflowedContainerIds.push(containerId);
   }
 
-  return {
-    reason: reasonFor(input),
-    operations: [...operations, ...reflowOperations],
-    nextSelectionIds: command.nextSelectionIds,
-    reflowedContainerIds,
-  };
+  return { reason: reasonFor(input), operations: [...operations, ...reflowOperations], nextSelectionIds: command.nextSelectionIds, reflowedContainerIds };
 }
