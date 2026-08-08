@@ -1,0 +1,35 @@
+appId: agency.imon.pitchmonumentum.core
+productName: Pitch Monumentum Core
+directories:
+  output: release-core
+files:
+  - dist/**/*
+  - apps/workspace/public/**/*
+  - package.json
+extraMetadata:
+  main: dist/apps/desktop/src/main.js
+asar: false
+mac:
+  category: public.app-category.productivity
+  target:
+    - target: dmg
+      arch:
+        - x64
+  hardenedRuntime: false
+  gatekeeperAssess: false
+  identity: null
+artifactName: Pitch-Monumentum-core-${version}-${arch}.${ext}
+dmg:
+  title: Pitch Monumentum Core
+  sign: false
+  window:
+    width: 660
+    height: 420
+  contents:
+    - x: 180
+      y: 210
+      type: file
+    - x: 480
+      y: 210
+      type: link
+      path: /Applications
