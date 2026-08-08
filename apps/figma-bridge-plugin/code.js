@@ -11,9 +11,22 @@ function firstRange(payload) { return Array.isArray(payload?.ranges) && payload.
 function textColor(payload) { return firstRange(payload)?.color || '#111111'; }
 function textSize(payload) { return Number(firstRange(payload)?.fontSizePt || 18); }
 function textFont(payload) { return String(firstRange(payload)?.fontFamily || 'Inter'); }
+function fontStyle(range) { return range?.bold && range?.italic ? 'Bold Italic' : range?.bold ? 'Bold' : range?.italic ? 'Italic' : 'Regular'; }
 async function loadFont(family, style = 'Regular') {
-  try { await figma.loadFontAsync({ family, style }); return { family, style }; }
-  catch { await figma.loadFontAsync({ family: 'Inter', style: 'Regular' }); return { family: 'Inter', style: 'Regular' }; }
+  const attempts = [
+    { family: String(family || 'Inter'), style: String(style || 'Regular') },
+    { family: String(family || 'Inter'), style: 'Regular' },
+    { family: 'Inter', style: String(style || 'Regular') },
+    { family: 'Inter', style: 'Regular' },
+  ];
+  const seen = new Set();
+  for (const candidate of attempts) {
+    const key = `${candidate.family}::${candidate.style}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    try { await figma.loadFontAsync(candidate); return candidate; } catch {}
+  }
+  throw new Error(`Unable to load a Figma font fallback for ${family} ${style}`);
 }
 function base64Bytes(value) {
   const binary = atob(value || ''); const bytes = new Uint8Array(binary.length);
@@ -59,13 +72,30 @@ function fillPaint(payload, fallback) {
   if (paint?.kind === 'none') return [];
   return fallback ? [solid(fallback)] : [];
 }
+async function applyTextRanges(node, payload) {
+  const characters = String(payload?.characters || '');
+  const ranges = Array.isArray(payload?.ranges) ? payload.ranges : [];
+  for (const range of ranges) {
+    const start = Math.max(0, Math.min(characters.length, Number(range?.start || 0)));
+    const end = Math.max(start, Math.min(characters.length, Number(range?.end || 0)));
+    if (end <= start) continue;
+    const font = await loadFont(range?.fontFamily || textFont(payload), fontStyle(range));
+    node.setRangeFontName(start, end, font);
+    if (Number.isFinite(range?.fontSizePt) && Number(range.fontSizePt) > 0) node.setRangeFontSize(start, end, Number(range.fontSizePt));
+    if (typeof range?.color === 'string') node.setRangeFills(start, end, [solid(range.color)]);
+    node.setRangeTextDecoration(start, end, range?.underline ? 'UNDERLINE' : 'NONE');
+    if (Number.isFinite(range?.letterSpacingPt) && typeof node.setRangeLetterSpacing === 'function') node.setRangeLetterSpacing(start, end, { unit: 'PIXELS', value: Number(range.letterSpacingPt) });
+  }
+}
 async function createText(spec, parent, origin) {
   const node = figma.createText(); parent.appendChild(node); applyCommon(node, spec, origin);
-  const payload = spec.payload || {}; const font = await loadFont(textFont(payload)); node.fontName = font; node.characters = String(payload.characters || ''); node.fontSize = textSize(payload); node.fills = [solid(textColor(payload))];
+  const payload = spec.payload || {}; const font = await loadFont(textFont(payload), fontStyle(firstRange(payload))); node.fontName = font; node.autoRename = false; node.characters = String(payload.characters || ''); node.fontSize = textSize(payload); node.fills = [solid(textColor(payload))];
+  await applyTextRanges(node, payload);
   try { node.resize(Math.max(1, spec.width), Math.max(1, spec.height)); } catch {}
   node.textAutoResize = 'NONE';
   if (payload.verticalAlign === 'middle') node.textAlignVertical = 'CENTER'; else if (payload.verticalAlign === 'bottom') node.textAlignVertical = 'BOTTOM'; else node.textAlignVertical = 'TOP';
   const firstParagraph = payload.paragraphs?.[0]; if (firstParagraph?.align) node.textAlignHorizontal = firstParagraph.align === 'justify' ? 'JUSTIFIED' : String(firstParagraph.align).toUpperCase();
+  node.name = spec.name || spec.pitchId;
   return node;
 }
 function createShape(spec, parent, origin) {
@@ -96,7 +126,7 @@ function createContainer(spec, parent, origin, transparent = false) {
   const node=figma.createFrame(); parent.appendChild(node); applyCommon(node,spec,origin); node.resize(Math.max(1,spec.width),Math.max(1,spec.height)); node.layoutMode='NONE'; const payload=spec.payload||{}; node.fills=transparent?[]:fillPaint(payload,payload.fill); node.clipsContent=Boolean(payload.clipContent); if (payload.radiusDU) node.cornerRadius=Math.max(0,payload.radiusDU); applyStroke(node,payload.stroke); applyEffects(node,payload.effects); return node;
 }
 async function createFallback(spec,parent,origin) {
-  const frame=createContainer(spec,parent,origin,true); frame.name=`${spec.name} · ${spec.type}`; const label=figma.createText(); frame.appendChild(label); const font=await loadFont('Inter'); label.fontName=font; label.characters=`${String(spec.type).toUpperCase()} · editable structured payload stored in plugin data`; label.fontSize=12; label.fills=[solid('#69727D')]; label.x=8; label.y=8; try{label.resize(Math.max(40,spec.width-16),28);}catch{} return frame;
+  const frame=createContainer(spec,parent,origin,true); frame.name=`${spec.name} · ${spec.type}`; const label=figma.createText(); frame.appendChild(label); const font=await loadFont('Inter'); label.fontName=font; label.autoRename=false; label.characters=`${String(spec.type).toUpperCase()} · editable structured payload stored in plugin data`; label.fontSize=12; label.fills=[solid('#69727D')]; label.x=8; label.y=8; try{label.resize(Math.max(40,spec.width-16),28);}catch{} return frame;
 }
 async function createNode(spec,parent,origin,assets) {
   if (spec.type==='text') return createText(spec,parent,origin);
