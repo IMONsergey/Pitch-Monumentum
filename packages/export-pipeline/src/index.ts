@@ -2,7 +2,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import type { ChartElement, DeckDocument } from "../../deck-model/src/index.js";
 import { dataStoryQuality } from "../../data-storytelling/src/index.js";
-import { compileDeckWithVectors } from "../../pptx-vector/src/index.js";
+import { compileDeckWithAppearance } from "../../pptx-appearance/src/index.js";
 import type { RichAsset } from "../../pptx-rich/src/index.js";
 import { validatePptxRoundTrip, type RoundTripIssue } from "../../pptx-roundtrip/src/index.js";
 import { runDeterministicQA, type QAIssue } from "../../qa/src/index.js";
@@ -94,11 +94,6 @@ function chartIssues(deck: DeckDocument): ExportPreflightIssue[] {
   return issues;
 }
 
-/**
- * Reports known target-specific visual approximations without pretending they are
- * exact round trips. These issues do not block production export because the object
- * remains editable and structurally intact; the UI can surface them before export.
- */
 export function powerPointStyleFidelityIssues(deck: DeckDocument): ExportPreflightIssue[] {
   const issues: ExportPreflightIssue[] = [];
   for (const slide of deck.slides) {
@@ -121,6 +116,36 @@ export function powerPointStyleFidelityIssues(deck: DeckDocument): ExportPreflig
           elementId: element.id,
           code: "pptx:image-corner-radius-not-preserved",
           message: "The image remains a native editable picture, but its Pitch corner radius is not yet preserved by the PowerPoint picture compiler.",
+        });
+      }
+      if (element.type === "shape" && element.shape === "custom" && (element.fillPaint || element.effects?.length)) {
+        issues.push({
+          severity: "major",
+          lane: "export",
+          slideId: slide.id,
+          elementId: element.id,
+          code: "pptx:custom-vector-appearance-not-preserved",
+          message: "Custom SVG path remains vector, but the current PowerPoint appearance pass does not inject Pitch gradient/shadow properties after SVG conversion.",
+        });
+      }
+      if (element.type === "frame" && (element.fillPaint || element.effects?.length) && !element.fill && !element.stroke) {
+        issues.push({
+          severity: "major",
+          lane: "export",
+          slideId: slide.id,
+          elementId: element.id,
+          code: "pptx:appearance-only-frame-not-emitted",
+          message: "This frame only has new Appearance properties and is structural in the current PowerPoint rich pass, so its visual frame itself is not emitted yet.",
+        });
+      }
+      if ((element.effects ?? []).filter((effect) => effect.kind === "dropShadow").length > 1) {
+        issues.push({
+          severity: "minor",
+          lane: "export",
+          slideId: slide.id,
+          elementId: element.id,
+          code: "pptx:multiple-drop-shadows-first-only",
+          message: "The current native PowerPoint appearance pass exports the first Pitch drop shadow only.",
         });
       }
     }
@@ -179,7 +204,7 @@ export async function exportProductionPptx(deck: DeckDocument, outputPath: strin
   const blockingPreflight = preflightIssues.filter((issue) => issue.severity === "critical");
   if (blockingPreflight.length && !allowDraft) throw new ProductionExportBlockedError(blockingPreflight);
 
-  const compiled = await compileDeckWithVectors(deck, outputPath, { assets: options.assets ?? {} });
+  const compiled = await compileDeckWithAppearance(deck, outputPath, options.assets ?? {});
   const finalElementResults = normalizeCompileResults(deck, compiled.elementResults);
   const editability = strategyCounts(finalElementResults);
   const unsupportedElementIds = finalElementResults.filter((item) => item.strategy === "unsupported").map((item) => item.elementId);
@@ -190,6 +215,7 @@ export async function exportProductionPptx(deck: DeckDocument, outputPath: strin
     ...preflightIssues
       .filter((issue) => issue.severity === "minor" || issue.severity === "major")
       .map((issue) => `${issue.elementId ?? issue.slideId ?? "deck"}: ${issue.message}`),
+    ...compiled.warnings,
     ...finalElementResults.flatMap((item) => item.warnings.map((warning) => `${item.elementId}: ${warning}`)),
   ];
 
