@@ -96,6 +96,9 @@ test("Pitch tool catalog exposes editor, motion, media, components and independe
   ]);
   assert.equal(tools.find(tool => tool.name === "pitch_project_state")?.readOnly, true);
   assert.equal(tools.find(tool => tool.name === "pitch_motion_command")?.readOnly, false);
+  const componentSchema = tools.find(tool => tool.name === "pitch_component_command")?.inputSchema as any;
+  assert.equal(componentSchema.oneOf.some((item: any) => item.properties.command.const === "updateFromSelection"), true);
+  assert.equal(componentSchema.oneOf.some((item: any) => item.properties.command.const === "resetInstance"), true);
 });
 
 test("Codex editor tool writes the same canonical deck version and can undo it", async () => {
@@ -168,7 +171,7 @@ test("Codex media command preserves the image object while changing native crop"
   assert.deepEqual(image.crop, { left: .1, top: .05, right: .1, bottom: .05 });
 });
 
-test("Codex can create a reusable component and insert a tagged instance", async () => {
+test("Codex can create, insert, resync and reset linked component instances", async () => {
   const { service, runtime } = await setup();
   let state = await service.state();
   const created = await runtime.callTool("pitch_component_command", {
@@ -197,9 +200,28 @@ test("Codex can create a reusable component and insert a tagged instance", async
   assert(instance);
   assert(instance.tags.includes("component:instance_decision"));
   assert(instance.tags.includes("component-def:component_decision_title"));
+  assert(instance.tags.includes("component-source:title"));
+  assert.equal(state.componentInstances.length, 1);
+  assert.equal(state.components.find((component: any) => component.id === "component_decision_title")?.instanceCount, 1);
+
+  const synced = await runtime.callTool("pitch_component_command", {
+    command: "refreshInstances",
+    componentId: "component_decision_title",
+    expectedDeckHash: state.deckHash,
+  });
+  assert.equal(synced.ok, true, synced.error);
+  state = await service.state();
+
+  const reset = await runtime.callTool("pitch_component_command", {
+    command: "resetInstance",
+    componentId: "component_decision_title",
+    instanceId: "instance_decision",
+    expectedDeckHash: state.deckHash,
+  });
+  assert.equal(reset.ok, true, reset.error);
 });
 
-test("project-state tool returns semantic handles plus motion and component summaries", async () => {
+test("project-state tool returns semantic handles plus motion, component instances and assets", async () => {
   const { runtime } = await setup();
   const result = await runtime.callTool("pitch_project_state");
   assert.equal(result.ok, true);
@@ -210,6 +232,8 @@ test("project-state tool returns semantic handles plus motion and component summ
   assert.equal("paragraphs" in data.deck.slides[0].elements[0], false);
   assert.equal(data.motion.deckId, "deck_tools");
   assert.deepEqual(data.components, []);
+  assert.deepEqual(data.componentInstances, []);
+  assert.deepEqual(data.assets, []);
 });
 
 test("unknown Pitch tool fails closed", async () => {
