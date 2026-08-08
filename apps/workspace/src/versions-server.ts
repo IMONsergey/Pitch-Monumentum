@@ -30,9 +30,6 @@ export function createVersionsWorkspaceServer(projectRoot: string) {
     try {
       const url = new URL(req.url ?? "/", "http://local");
       if (req.method === "GET" && url.pathname === "/editor-spike.js") {
-        const response = await fetch(`http://127.0.0.1:${(inner.server.address() as any)?.port ?? 0}/editor-spike.js`).catch(() => null);
-        // The inner server is not separately listening in composition mode; read its generated bundle by delegating below is impossible.
-        // Instead use the public base bundle plus all additive UI layers directly, matching the same composition order.
         const [editor, design, masters, director, preview, runs, versionUi] = await Promise.all([
           readFile(resolve("apps", "workspace", "public", "editor-spike.js"), "utf8"),
           readFile(resolve("apps", "workspace", "public", "design-system-ui.js"), "utf8"),
@@ -42,7 +39,6 @@ export function createVersionsWorkspaceServer(projectRoot: string) {
           readFile(resolve("apps", "workspace", "public", "creative-runs-ui.js"), "utf8"),
           readFile(resolve("apps", "workspace", "public", "versions-ui.js"), "utf8"),
         ]);
-        void response;
         res.writeHead(200, { "content-type": "text/javascript; charset=utf-8", "cache-control": "no-store" });
         res.end(`${editor}\n${design}\n${masters}\n${director}\n${preview}\n${runs}\n${versionUi}\n`);
         return;
