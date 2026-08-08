@@ -2,8 +2,9 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { readFile, stat } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
 import { createReviewWorkspaceServer } from "./review-server.js";
-import { DeliveryRuntime, type DeliveryFormat } from "../../delivery/src/runtime.js";
+import { DeliveryRuntime, type DeliveryFormat, type DeliveryManifest } from "../../delivery/src/runtime.js";
 import type { ReviewDeliveryPolicy } from "../../../packages/review-engine/src/delivery.js";
+import { inspectFilesystemArtifact } from "../../../packages/fs-artifact/src/index.js";
 
 function json(res: ServerResponse, status: number, value: unknown): void {
   res.writeHead(status, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
@@ -30,6 +31,8 @@ function mime(filename: string): string {
   return "application/octet-stream";
 }
 
+function sameOptionalHash(a?: string, b?: string): boolean { return (a ?? "") === (b ?? ""); }
+
 export function createDeliveryWorkspaceServer(projectRoot: string) {
   const root = resolve(projectRoot);
   const inner = createReviewWorkspaceServer(root);
@@ -55,10 +58,45 @@ export function createDeliveryWorkspaceServer(projectRoot: string) {
         const requested = url.searchParams.get("file") ?? "";
         const filename = basename(requested);
         if (!filename || filename !== requested || filename.includes("..")) throw new Error("Invalid delivery artifact filename");
+
+        const current = await delivery.preflight();
+        const manifestPath = join(exportDir, `${current.deckId}-delivery-manifest.json`);
+        let manifest: DeliveryManifest;
+        try { manifest = JSON.parse(await readFile(manifestPath, "utf8")) as DeliveryManifest; }
+        catch {
+          json(res, 409, { error: "No current Delivery manifest authorizes browser download. Re-export from Delivery Center.", filename });
+          return;
+        }
+        const snapshotMatches =
+          manifest.deckId === current.deckId &&
+          manifest.deckHash === current.deckHash &&
+          manifest.preflight.activeBranchId === current.activeBranchId &&
+          sameOptionalHash(manifest.preflight.reviewHash, current.reviewHash) &&
+          sameOptionalHash(manifest.preflight.motionHash, current.motionHash);
+        if (!snapshotMatches) {
+          json(res, 409, { error: "Delivery artifact belongs to a stale project/review/motion snapshot. Re-export before download.", filename });
+          return;
+        }
+        const artifact = manifest.artifacts.find((item) => item.filename === filename);
+        if (!artifact) {
+          json(res, 404, { error: "Artifact is not part of the current Delivery manifest.", filename });
+          return;
+        }
+        const formatState = current.formats[artifact.format];
+        if (!formatState?.ready) {
+          json(res, 409, { error: "Current Delivery preflight no longer permits this format.", filename, blockers: formatState?.blockers ?? [] });
+          return;
+        }
+
         const path = join(exportDir, filename);
         const info = await stat(path);
         if (!info.isFile()) {
           json(res, 409, { error: "This delivery artifact is a package/directory and cannot be downloaded by the browser endpoint. Open/reveal it from the desktop shell instead.", filename });
+          return;
+        }
+        const inspected = await inspectFilesystemArtifact(path);
+        if (inspected.sha256 !== artifact.sha256 || inspected.bytes !== artifact.bytes || inspected.kind !== artifact.filesystemKind) {
+          json(res, 409, { error: "Delivery artifact bytes no longer match the signed manifest metadata. Re-export before download.", filename });
           return;
         }
         const bytes = await readFile(path);
