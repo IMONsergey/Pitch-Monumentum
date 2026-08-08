@@ -1,0 +1,49 @@
+{
+  "version": "1.0",
+  "date": "2026-08-08",
+  "policy": {
+    "canonicalModel": "PitchOS DeckDocument/SceneGraph",
+    "rule": "Third-party libraries execute editing/rendering/layout operations through adapters and never own persistent document truth."
+  },
+  "repositories": [
+    {"repo":"daybrush/moveable","role":"object transforms/snapping/group/clip/warp","priority":"P0","disposition":"integrate","license":"MIT"},
+    {"repo":"daybrush/selecto","role":"marquee and multi-selection","priority":"P0","disposition":"integrate","license":"MIT"},
+    {"repo":"daybrush/guides","role":"guides and ruler UI","priority":"P0","disposition":"integrate","license":"MIT"},
+    {"repo":"daybrush/infinite-viewer","role":"pan/zoom workspace viewport","priority":"P0","disposition":"integrate","license":"MIT"},
+    {"repo":"daybrush/scenejs","role":"animation preview runtime","priority":"P1","disposition":"integrate-after-core","license":"MIT"},
+    {"repo":"daybrush/scena","role":"reference integration of Daybrush editor primitives","priority":"P0","disposition":"study/reference","license":"MIT"},
+    {"repo":"facebook/lexical","role":"rich text editing runtime","priority":"P0","disposition":"integrate","license":"MIT"},
+    {"repo":"react/yoga","role":"Figma-like constrained auto layout execution","priority":"P0","disposition":"integrate","license":"MIT"},
+    {"repo":"paperjs/paper.js","role":"vector path geometry, hit testing, boolean/path operations","priority":"P0","disposition":"prototype/integrate-selectively","license":"MIT"},
+    {"repo":"steveruizok/perfect-freehand","role":"pen/highlighter/freehand stroke generation","priority":"P1","disposition":"integrate","license":"MIT"},
+    {"repo":"yjs/yjs","role":"live collaboration/presence CRDT layer","priority":"P2","disposition":"integrate-later","license":"MIT"},
+    {"repo":"foliojs/fontkit","role":"font parsing, metrics, shaping/subsetting research","priority":"P1","disposition":"evaluate","license":"verify-before-prod"},
+    {"repo":"opentypejs/opentype.js","role":"font parsing and geometry/metrics","priority":"P1","disposition":"evaluate","license":"verify-before-prod"},
+    {"repo":"kieler/elkjs","role":"automatic graph/diagram layout","priority":"P1","disposition":"integrate-for-diagrams","license":"verify-before-prod"},
+    {"repo":"mermaid-js/mermaid","role":"semantic diagram grammar and import/export reference","priority":"P1","disposition":"adapter/reference","license":"verify-before-prod"},
+    {"repo":"iconify/iconify","role":"icon search/render framework","priority":"P1","disposition":"integrate-selectively","license":"framework license plus per-icon-set licenses"},
+    {"repo":"iconify/icon-sets","role":"large icon catalog","priority":"P1","disposition":"catalog-with-license-filter","license":"varies by icon set"},
+    {"repo":"lucide-icons/lucide","role":"default consistent editable icon set","priority":"P0","disposition":"integrate","license":"ISC/MIT-derived assets; verify notices"},
+    {"repo":"mozilla/pdf.js","role":"deterministic PDF parsing/rendering baseline","priority":"P1","disposition":"integrate-for-pdf-intake","license":"verify-before-prod"},
+    {"repo":"microsoft/playwright","role":"editor E2E and screenshot rendering","priority":"P0","disposition":"integrate-dev","license":"verify-before-prod"},
+    {"repo":"mapbox/pixelmatch","role":"visual regression diff","priority":"P1","disposition":"integrate-dev","license":"verify-before-prod"},
+    {"repo":"lovell/sharp","role":"local raster image transforms/export","priority":"P1","disposition":"evaluate","license":"verify-before-prod"},
+    {"repo":"thx/resvg-js","role":"deterministic SVG rasterization","priority":"P1","disposition":"evaluate","license":"verify-before-prod"},
+    {"repo":"fabricjs/fabric.js","role":"canvas editor reference/specialized raster sub-engine","priority":"P2","disposition":"reference-not-core","license":"MIT"},
+    {"repo":"konvajs/konva","role":"interactive canvas reference/specialized sub-engine","priority":"P2","disposition":"reference-not-core","license":"MIT"},
+    {"repo":"pixijs/pixijs","role":"optional WebGL effects/video/particles rendering","priority":"P2","disposition":"optional-effects-layer","license":"MIT"},
+    {"repo":"GraphiteEditor/Graphite","role":"advanced vector/raster/node-graph algorithms","priority":"P1","disposition":"study/selective-WASM-later","license":"Apache-2.0"},
+    {"repo":"salgum1114/react-design-editor","role":"PowerPoint-like editor feature reference","priority":"P1","disposition":"study/selective-patterns","license":"MIT"},
+    {"repo":"penpot/penpot","role":"professional design editor reference","priority":"P2","disposition":"study-only","license":"MPL-2.0"},
+    {"repo":"figma/plugin-samples","role":"official Figma plugin/exporter implementation patterns","priority":"P1","disposition":"use-for-figma-exporter","license":"verify-before-prod"},
+    {"repo":"SVG-Edit/svgedit","role":"SVG vector editing reference","priority":"P2","disposition":"study","license":"verify-before-prod"}
+  ],
+  "rejectedAsCore": [
+    {"product":"Polotno SDK","reason":"current license prohibits building or assisting a competing editor/design platform"},
+    {"product":"tldraw SDK","reason":"production license dependency plus second major document/store abstraction"},
+    {"product":"IMG.LY CE.SDK","reason":"commercial vendor-owned creative engine on a strategic moat layer"},
+    {"product":"ONLYOFFICE Community","reason":"AGPL and Office-suite-first architecture"},
+    {"product":"PPTist main","reason":"AGPL-3.0/current commercial licensing plus duplicate document model"},
+    {"product":"LidoJS public repo","reason":"no clear public repository license found during audit"}
+  ]
+}

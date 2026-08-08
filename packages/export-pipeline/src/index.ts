@@ -19,7 +19,7 @@ export interface ExportStrategyCounts {
   unsupported: number;
 }
 export interface ExportPreflightIssue {
-  severity: "minor" | "major" | "critical";
+  severity: "info" | "minor" | "major" | "critical";
   lane: "deterministic" | "data" | "export";
   slideId?: string;
   elementId?: string;

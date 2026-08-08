@@ -1,5 +1,5 @@
 import type { DeckDocument, SceneElement, SlideDocument } from "../../deck-model/src/index.js";
-import { applyDeckMutation, createMutation, type AppliedMutation, type DeckMutationOperation } from "../../mutations/src/index.js";
+import { applyDeckMutation, createMutation, type AppliedDeckMutation, type DeckMutationOperation } from "../../mutations/src/index.js";
 
 export type EditScopeKind = "element" | "slide" | "section" | "deck";
 export interface EditSelection { scope: EditScopeKind; slideIds: string[]; elementIds: string[]; sectionId?: string; }
@@ -71,7 +71,7 @@ export function validateAgentEditProposal(deck: DeckDocument, selection: EditSel
   }
   return { proposal, autoApplicable: true };
 }
-export async function proposeAndApplyAgentEdit(deck: DeckDocument, selection: EditSelection, instruction: string, reasoner: CodexEditReasoner): Promise<{ validated: ValidatedEditProposal; applied?: AppliedMutation }> {
+export async function proposeAndApplyAgentEdit(deck: DeckDocument, selection: EditSelection, instruction: string, reasoner: CodexEditReasoner): Promise<{ validated: ValidatedEditProposal; applied?: AppliedDeckMutation }> {
   const proposal = await reasoner.runStructured<AgentEditProposal>(createAgentEditTask(deck, selection, instruction));
   const validated = validateAgentEditProposal(deck, selection, proposal);
   if (!validated.autoApplicable) return { validated };
