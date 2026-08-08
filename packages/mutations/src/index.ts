@@ -13,6 +13,12 @@ import type {
 import { stableStringify } from "../../shared/src/index.js";
 
 export type MutationOrigin = "user" | "codex" | "deterministic";
+export type StrokeStyle = { color: string; widthDU: number; dash?: "solid" | "dash" | "dot" };
+export type ElementStylePatch =
+  | { kind: "shape"; fill?: string | null; stroke?: StrokeStyle | null; radiusDU?: number | null }
+  | { kind: "frame"; fill?: string | null; stroke?: StrokeStyle | null; radiusDU?: number | null; clipContent?: boolean }
+  | { kind: "image"; cornerRadiusDU?: number | null; fit?: "cover" | "contain" | "stretch" }
+  | { kind: "line"; stroke?: StrokeStyle; startMarker?: "none" | "arrow" | "dot"; endMarker?: "none" | "arrow" | "dot" };
 
 export type DeckMutationOperation =
   | {
@@ -37,6 +43,12 @@ export type DeckMutationOperation =
         locked?: boolean;
         name?: string;
       };
+    }
+  | {
+      op: "updateElementStyle";
+      slideId: string;
+      elementId: string;
+      style: ElementStylePatch;
     }
   | {
       op: "updateAutoLayout";
@@ -225,6 +237,47 @@ function mutateElement(
   return replaceSlide(deck, slideId, nextSlide);
 }
 
+function valueOrUndefined<T>(value: T | null | undefined): T | undefined {
+  return value === null ? undefined : value;
+}
+
+function applyElementStyle(element: SceneElement, style: ElementStylePatch): SceneElement {
+  if (style.kind === "shape") {
+    if (element.type !== "shape") throw new Error(`Element ${element.id} is not a shape`);
+    return {
+      ...element,
+      ...(style.fill !== undefined ? { fill: valueOrUndefined(style.fill) } : {}),
+      ...(style.stroke !== undefined ? { stroke: valueOrUndefined(style.stroke) } : {}),
+      ...(style.radiusDU !== undefined ? { radiusDU: valueOrUndefined(style.radiusDU) } : {}),
+    };
+  }
+  if (style.kind === "frame") {
+    if (element.type !== "frame") throw new Error(`Element ${element.id} is not a frame`);
+    return {
+      ...element,
+      ...(style.fill !== undefined ? { fill: valueOrUndefined(style.fill) } : {}),
+      ...(style.stroke !== undefined ? { stroke: valueOrUndefined(style.stroke) } : {}),
+      ...(style.radiusDU !== undefined ? { radiusDU: valueOrUndefined(style.radiusDU) } : {}),
+      ...(style.clipContent !== undefined ? { clipContent: style.clipContent } : {}),
+    };
+  }
+  if (style.kind === "image") {
+    if (element.type !== "image") throw new Error(`Element ${element.id} is not an image`);
+    return {
+      ...element,
+      ...(style.cornerRadiusDU !== undefined ? { cornerRadiusDU: valueOrUndefined(style.cornerRadiusDU) } : {}),
+      ...(style.fit !== undefined ? { fit: style.fit } : {}),
+    };
+  }
+  if (element.type !== "line") throw new Error(`Element ${element.id} is not a line`);
+  return {
+    ...element,
+    ...(style.stroke !== undefined ? { stroke: style.stroke } : {}),
+    ...(style.startMarker !== undefined ? { startMarker: style.startMarker } : {}),
+    ...(style.endMarker !== undefined ? { endMarker: style.endMarker } : {}),
+  };
+}
+
 function applyOperation(deck: DeckDocument, operation: DeckMutationOperation): DeckDocument {
   switch (operation.op) {
     case "replaceText":
@@ -242,6 +295,8 @@ function applyOperation(deck: DeckDocument, operation: DeckMutationOperation): D
         ...element,
         ...operation.changes,
       }));
+    case "updateElementStyle":
+      return mutateElement(deck, operation.slideId, operation.elementId, (element) => applyElementStyle(element, operation.style));
     case "updateAutoLayout":
       return mutateElement(deck, operation.slideId, operation.elementId, (element) => {
         if (!isContainer(element)) throw new Error(`Element ${operation.elementId} cannot own auto layout`);
