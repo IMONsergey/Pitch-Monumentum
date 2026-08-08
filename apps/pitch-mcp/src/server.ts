@@ -92,23 +92,31 @@ const mediaCommandShape = {
 };
 
 const componentCommandShape = {
-  command: z.enum(["createFromSelection", "insert", "detach"]),
-  slideId: z.string().min(1), selectedIds: z.array(z.string().min(1)).optional(), name: z.string().optional(), componentId: z.string().optional(), description: z.string().optional(),
-  transform: z.object({ x: z.number(), y: z.number(), scaleX: z.number().positive().optional(), scaleY: z.number().positive().optional() }).optional(), overrides: z.array(z.any()).optional(), instanceId: z.string().optional(), expectedDeckHash: z.string().optional(),
+  command: z.enum(["createFromSelection", "insert", "updateFromSelection", "refreshInstances", "resetInstance", "detach"]),
+  slideId: z.string().min(1).optional(),
+  selectedIds: z.array(z.string().min(1)).optional(),
+  name: z.string().optional(),
+  componentId: z.string().optional(),
+  description: z.string().optional(),
+  transform: z.object({ x: z.number(), y: z.number(), scaleX: z.number().positive().optional(), scaleY: z.number().positive().optional() }).optional(),
+  overrides: z.array(z.any()).optional(),
+  instanceId: z.string().optional(),
+  expectedDeckHash: z.string().optional(),
 };
 
 export function createPitchMcpServer(projectRoot: string): McpServer {
   const workspace = new PitchWorkspaceService(resolve(projectRoot));
   const runtime = new PitchToolRuntime(workspace);
   const server = new McpServer(
-    { name: "pitch-monumentum", version: "0.3.0" },
+    { name: "pitch-monumentum", version: "0.4.0" },
     {
       instructions: [
-        "Use pitch_project_state before meaningful edits to obtain current slide/object IDs, deckHash, motionHash, component handles and project asset handles.",
+        "Use pitch_project_state before meaningful edits to obtain current slide/object IDs, deckHash, motionHash, component master/instance handles and project asset handles.",
         "Use pitch_editor_command for canonical scene and storyboard edits instead of raw deck mutations. Use insertImage with an assetId already present in project state.",
-        "Use pitch_media_command for image fit, crop and asset replacement; use pitch_component_command for reusable component workflows.",
+        "Use pitch_media_command for image fit, crop and asset replacement.",
+        "Use pitch_component_command for reusable component workflows: create/insert, updateFromSelection to update a master and propagate it, refreshInstances to resync linked instances, resetInstance to clear local slot overrides, or detach to break the link.",
         "Use pitch_motion_command for transitions, build order and keyframe tracks. Motion history is independent: use pitch_motion_undo/pitch_motion_redo for animation mistakes.",
-        "Preserve requested scope. Prefer one coherent bounded command at a time and re-read state after operations that change IDs, hierarchy, slide order, component instances, assets or motion history.",
+        "Preserve requested scope. Prefer one coherent bounded command at a time and re-read state after operations that change IDs, hierarchy, slide order, component masters/instances, assets or motion history.",
         "Use pitch_undo immediately if a deck mutation produced an unintended result.",
       ].join(" "),
     },
@@ -116,7 +124,7 @@ export function createPitchMcpServer(projectRoot: string): McpServer {
 
   server.registerTool(
     "pitch_project_state",
-    { title: "Read Pitch project state", description: "Read active branch, deck hash, slide semantics, object handles, QA, motion timeline/history, reusable components, project image assets and branch-local deck history.", inputSchema: {} },
+    { title: "Read Pitch project state", description: "Read active branch, deck hash, slide semantics, object handles, QA, motion timeline/history, reusable component masters and linked instances, project image assets and branch-local deck history.", inputSchema: {} },
     async () => mcpResult(await runtime.callTool("pitch_project_state")),
   );
   server.registerTool(
@@ -136,7 +144,7 @@ export function createPitchMcpServer(projectRoot: string): McpServer {
   );
   server.registerTool(
     "pitch_component_command",
-    { title: "Edit Pitch components", description: "Create reusable components, insert instances with overrides, or detach instances while preserving editable content.", inputSchema: componentCommandShape },
+    { title: "Edit Pitch components", description: "Create/insert components, update masters with linked-instance propagation, resync instances, reset local overrides, or detach instances while preserving editable content.", inputSchema: componentCommandShape },
     async (args) => mcpResult(await runtime.callTool("pitch_component_command", args)),
   );
   server.registerTool(
