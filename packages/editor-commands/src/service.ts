@@ -1,7 +1,7 @@
 import type { DeckDocument, Geometry, SceneElement, SlideDocument, TextRun, VectorPathData } from "../../deck-model/src/index.js";
 import { autoLayoutMutationOperations } from "../../auto-layout/src/index.js";
 import { applyDeckMutation, createMutation, type DeckMutationOperation, type ElementAppearancePatch, type ElementStylePatch } from "../../mutations/src/index.js";
-import { validateVectorPathData, vectorPathToSvg } from "../../vector-engine/src/index.js";
+import { validateVectorPathData, vectorPathToSvg } from "../../vector-path/src/index.js";
 import {
   alignSelection,
   arrangeSelection,
@@ -45,6 +45,7 @@ export type EditorCommandInput =
   | { command: "setTextStyle"; slideId: string; elementId: string; style: TextStylePatch }
   | { command: "setStyle"; slideId: string; elementId: string; style: ElementStylePatch }
   | { command: "setAppearance"; slideId: string; elementId: string; appearance: ElementAppearancePatch }
+  | { command: "setVectorPath"; slideId: string; elementId: string; pathData: VectorPathData }
   | { command: "setInspector"; slideId: string; elementId: string; geometry?: Partial<Geometry>; presentation?: PresentationPatch; textStyle?: TextStylePatch; style?: ElementStylePatch; appearance?: ElementAppearancePatch }
   | { command: "insertText"; slideId: string; geometry: Geometry; text?: string }
   | { command: "insertShape"; slideId: string; geometry: Geometry; shape?: "rect" | "roundRect" | "ellipse" | "triangle"; fill?: string }
@@ -172,6 +173,12 @@ function dispatch(slide: SlideDocument, input: Exclude<EditorCommandInput, { com
       const element = elementById(slide, input.elementId);
       return { operations: [{ op: "updateElementAppearance", slideId: slide.id, elementId: input.elementId, appearance: appearancePatch(element, input.appearance) }], nextSelectionIds: [input.elementId], affectedAutoLayoutContainerIds: [] };
     }
+    case "setVectorPath": {
+      const element = elementById(slide, input.elementId);
+      if (element.type !== "shape" || element.shape !== "custom") throw new Error(`Element ${input.elementId} is not an editable custom vector`);
+      validateVectorPathData(input.pathData);
+      return { operations: [{ op: "updateVectorPath", slideId: slide.id, elementId: input.elementId, pathData: structuredClone(input.pathData) }], nextSelectionIds: [input.elementId], affectedAutoLayoutContainerIds: [] };
+    }
     case "setInspector": {
       const element = elementById(slide, input.elementId);
       const operations: DeckMutationOperation[] = [];
@@ -234,6 +241,7 @@ function reasonFor(input: EditorCommandInput): string {
     case "setTextStyle": return `Set text style ${input.elementId}`;
     case "setStyle": return `Set visual style ${input.elementId}`;
     case "setAppearance": return `Set appearance ${input.elementId}`;
+    case "setVectorPath": return `Edit vector path ${input.elementId}`;
     case "setInspector": return `Apply Inspector ${input.elementId}`;
     case "insertText": return "Insert text";
     case "insertShape": return "Insert shape";
