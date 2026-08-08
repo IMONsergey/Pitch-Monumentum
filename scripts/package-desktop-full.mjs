@@ -5,8 +5,9 @@ import { resolve } from "node:path";
 const root = process.cwd();
 const requiredAfterBuild = [
   "dist/apps/desktop-full/src/main.js",
-  "dist/apps/desktop-next/src/main.js",
-  "dist/apps/desktop-next/src/preload.js",
+  "dist/apps/desktop-runtime/src/main.js",
+  "dist/apps/desktop-runtime/src/preload.js",
+  "dist/apps/desktop-runtime/src/static-render.js",
   "dist/apps/workspace/src/full-server.js",
   "dist/apps/workspace/src/delivery-server.js",
   "dist/apps/review/src/runtime.js",
