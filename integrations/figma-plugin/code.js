@@ -31,6 +31,16 @@ function safeSet(target, key, value, warnings, label) {
   }
 }
 
+function safePluginData(node, key, value, warnings, label) {
+  try {
+    node.setPluginData(key, value);
+    return true;
+  } catch (error) {
+    warnings.push(`${label || key}: pluginData was not preserved (${error instanceof Error ? error.message : String(error)})`);
+    return false;
+  }
+}
+
 function base64Bytes(value) {
   const binary = atob(value);
   const bytes = new Uint8Array(binary.length);
@@ -143,12 +153,8 @@ function configureAutoLayout(node, element, childNodes, warnings) {
 
   const widthHug = (layout.widthSizing || 'fixed') === 'hug';
   const heightHug = (layout.heightSizing || 'fixed') === 'hug';
-  if ('primaryAxisSizingMode' in node) {
-    safeSet(node, 'primaryAxisSizingMode', (horizontal ? widthHug : heightHug) ? 'AUTO' : 'FIXED', warnings, `${element.id} primary sizing`);
-  }
-  if ('counterAxisSizingMode' in node) {
-    safeSet(node, 'counterAxisSizingMode', (horizontal ? heightHug : widthHug) ? 'AUTO' : 'FIXED', warnings, `${element.id} counter sizing`);
-  }
+  if ('primaryAxisSizingMode' in node) safeSet(node, 'primaryAxisSizingMode', (horizontal ? widthHug : heightHug) ? 'AUTO' : 'FIXED', warnings, `${element.id} primary sizing`);
+  if ('counterAxisSizingMode' in node) safeSet(node, 'counterAxisSizingMode', (horizontal ? heightHug : widthHug) ? 'AUTO' : 'FIXED', warnings, `${element.id} counter sizing`);
 
   for (const childId of element.childIds || []) {
     const entry = childNodes.get(childId);
@@ -241,31 +247,36 @@ async function createText(element, context, warnings) {
     const fontName = chooseFont(run, context.availableFonts, warnings);
     await context.loadFont(fontName);
     try { node.setRangeFontName(segment.start, segment.end, fontName); } catch (error) { warnings.push(`${element.id} font range: ${error}`); }
-    if (run.fontSizePt != null) {
-      try { node.setRangeFontSize(segment.start, segment.end, run.fontSizePt * PT_TO_PX); } catch (error) { warnings.push(`${element.id} font size: ${error}`); }
-    }
-    if (run.color) {
-      try { node.setRangeFills(segment.start, segment.end, [solidPaint(run.color)]); } catch (error) { warnings.push(`${element.id} color: ${error}`); }
-    }
-    if (run.underline) {
-      try { node.setRangeTextDecoration(segment.start, segment.end, 'UNDERLINE'); } catch (error) { warnings.push(`${element.id} underline: ${error}`); }
-    }
-    if (run.letterSpacingPt != null) {
-      try { node.setRangeLetterSpacing(segment.start, segment.end, { unit: 'PIXELS', value: run.letterSpacingPt * PT_TO_PX }); } catch (error) { warnings.push(`${element.id} letter spacing: ${error}`); }
-    }
+    if (run.fontSizePt != null) try { node.setRangeFontSize(segment.start, segment.end, run.fontSizePt * PT_TO_PX); } catch (error) { warnings.push(`${element.id} font size: ${error}`); }
+    if (run.color) try { node.setRangeFills(segment.start, segment.end, [solidPaint(run.color)]); } catch (error) { warnings.push(`${element.id} color: ${error}`); }
+    if (run.underline) try { node.setRangeTextDecoration(segment.start, segment.end, 'UNDERLINE'); } catch (error) { warnings.push(`${element.id} underline: ${error}`); }
+    if (run.letterSpacingPt != null) try { node.setRangeLetterSpacing(segment.start, segment.end, { unit: 'PIXELS', value: run.letterSpacingPt * PT_TO_PX }); } catch (error) { warnings.push(`${element.id} letter spacing: ${error}`); }
   }
 
   const aligns = [...new Set((element.paragraphs || []).map(p => p.align || 'left'))];
   if (aligns.length === 1) {
     const map = { left: 'LEFT', center: 'CENTER', right: 'RIGHT', justify: 'JUSTIFIED' };
     safeSet(node, 'textAlignHorizontal', map[aligns[0]] || 'LEFT', warnings, `${element.id} paragraph alignment`);
-  } else if (aligns.length > 1) {
-    warnings.push(`text:${element.id}: mixed paragraph alignment is not yet imported exactly`);
-  }
+  } else if (aligns.length > 1) warnings.push(`text:${element.id}: mixed paragraph alignment is not yet imported exactly`);
   const vertical = element.verticalAlign === 'middle' ? 'CENTER' : element.verticalAlign === 'bottom' ? 'BOTTOM' : 'TOP';
   safeSet(node, 'textAlignVertical', vertical, warnings, `${element.id} vertical alignment`);
   if ((element.paragraphs || []).some(p => p.bullet)) warnings.push(`text:${element.id}: bullet/list semantics are not yet imported exactly`);
   if (element.insetsDU) warnings.push(`text:${element.id}: text insets require a wrapper frame and are not yet imported exactly`);
+  return node;
+}
+
+async function createPrimitiveLabel(text, width, height, context, warnings, options = {}) {
+  const node = figma.createText();
+  const fontName = chooseFont({ bold: Boolean(options.bold), fontFamily: options.fontFamily || 'Inter' }, context.availableFonts, warnings);
+  await context.loadFont(fontName);
+  node.fontName = fontName;
+  node.characters = String(text ?? '');
+  node.fontSize = options.fontSize || 12;
+  node.fills = [solidPaint(options.color || '#111111')];
+  node.textAutoResize = 'NONE';
+  node.textAlignHorizontal = options.align || 'LEFT';
+  node.textAlignVertical = 'CENTER';
+  node.resize(Math.max(1, width), Math.max(1, height));
   return node;
 }
 
@@ -302,6 +313,204 @@ function createImageNode(element, bundle, warnings) {
   return node;
 }
 
+async function createTableNode(element, context, warnings) {
+  const root = figma.createFrame();
+  root.name = element.name || `Table · ${element.id}`;
+  root.resize(Math.max(1, element.geometry.width), Math.max(1, element.geometry.height));
+  root.fills = [];
+  root.clipsContent = true;
+  safePluginData(root, 'pitchTableData', JSON.stringify({ rows: element.rows, columnWidths: element.columnWidths || null }), warnings, `table:${element.id}`);
+
+  const rows = element.rows || [];
+  const rowCount = Math.max(1, rows.length);
+  const colCount = Math.max(1, ...rows.map(row => row.reduce((sum, cell) => sum + Math.max(1, cell.colspan || 1), 0)));
+  let weights = Array.isArray(element.columnWidths) && element.columnWidths.length === colCount ? element.columnWidths.map(Number) : Array(colCount).fill(1);
+  const totalWeight = weights.reduce((sum, value) => sum + Math.max(0, value || 0), 0) || colCount;
+  weights = weights.map(value => Math.max(0, value || 0) / totalWeight);
+  const xPositions = [0];
+  for (let i = 0; i < weights.length; i += 1) xPositions.push(xPositions[i] + element.geometry.width * weights[i]);
+  const rowHeight = element.geometry.height / rowCount;
+
+  rows.forEach((row, rowIndex) => {
+    let columnIndex = 0;
+    row.forEach((cell, cellIndex) => {
+      const colspan = Math.max(1, cell.colspan || 1);
+      const rowspan = Math.max(1, cell.rowspan || 1);
+      const x = xPositions[columnIndex] || 0;
+      const rightIndex = Math.min(colCount, columnIndex + colspan);
+      const width = Math.max(1, (xPositions[rightIndex] ?? element.geometry.width) - x);
+      const height = Math.max(1, rowHeight * rowspan);
+      const cellNode = figma.createFrame();
+      cellNode.name = `Cell ${rowIndex + 1}:${cellIndex + 1}`;
+      cellNode.resize(width, height);
+      cellNode.x = x;
+      cellNode.y = rowIndex * rowHeight;
+      cellNode.fills = [solidPaint(rowIndex === 0 ? '#F2F4F7' : '#FFFFFF')];
+      cellNode.strokes = [solidPaint('#D0D5DD')];
+      cellNode.strokeWeight = 1;
+      root.appendChild(cellNode);
+      safePluginData(cellNode, 'pitchTableCell', JSON.stringify(cell), warnings, `table:${element.id}:cell`);
+      void createPrimitiveLabel(cell.text || '', Math.max(1, width - 16), Math.max(1, height - 12), context, warnings, { bold: rowIndex === 0, fontSize: 12 }).then(textNode => {
+        textNode.x = 8;
+        textNode.y = 6;
+        cellNode.appendChild(textNode);
+      });
+      columnIndex += colspan;
+    });
+  });
+  return root;
+}
+
+function chartValues(chart) {
+  return (chart.series || []).flatMap(series => (series.values || []).filter(value => Number.isFinite(value)));
+}
+
+function chartScale(values) {
+  if (!values.length) return { min: 0, max: 1 };
+  const minValue = Math.min(0, ...values);
+  const maxValue = Math.max(0, ...values);
+  if (minValue === maxValue) return { min: minValue, max: minValue + 1 };
+  return { min: minValue, max: maxValue };
+}
+
+function chartColor(index) {
+  const palette = ['#335CFF', '#14B8A6', '#F59E0B', '#EF4444', '#8B5CF6', '#0EA5E9', '#84CC16'];
+  return palette[index % palette.length];
+}
+
+async function createChartNode(element, context, warnings) {
+  const root = figma.createFrame();
+  root.name = element.name || `Chart · ${element.id}`;
+  root.resize(Math.max(1, element.geometry.width), Math.max(1, element.geometry.height));
+  root.fills = [];
+  root.clipsContent = true;
+  safePluginData(root, 'pitchChartData', JSON.stringify(element.chart), warnings, `chart:${element.id}`);
+  safePluginData(root, 'pitchChartInsight', String(element.chart?.insightStatement || ''), warnings, `chart:${element.id}:insight`);
+
+  const chart = element.chart || {};
+  const categories = chart.categories || [];
+  const series = chart.series || [];
+  const values = chartValues(chart);
+  const { min, max } = chartScale(values);
+  const plot = { left: 44, top: 20, right: Math.max(60, element.geometry.width - 16), bottom: Math.max(50, element.geometry.height - 38) };
+  const plotWidth = Math.max(1, plot.right - plot.left);
+  const plotHeight = Math.max(1, plot.bottom - plot.top);
+  const range = max - min || 1;
+  const zeroY = plot.top + (max / range) * plotHeight;
+  const zeroX = plot.left + ((0 - min) / range) * plotWidth;
+
+  const axisX = figma.createLine(); axisX.resize(plotWidth, 0.01); axisX.x = plot.left; axisX.y = Math.max(plot.top, Math.min(plot.bottom, zeroY)); axisX.strokes = [solidPaint('#98A2B3')]; axisX.strokeWeight = 1; root.appendChild(axisX);
+  const axisY = figma.createLine(); axisY.resize(plotHeight, 0.01); axisY.rotation = -90; axisY.x = plot.left; axisY.y = plot.bottom; axisY.strokes = [solidPaint('#98A2B3')]; axisY.strokeWeight = 1; root.appendChild(axisY);
+
+  if (chart.chartType === 'column') {
+    const categoryCount = Math.max(1, categories.length || Math.max(0, ...series.map(item => item.values?.length || 0)));
+    const groupWidth = plotWidth / categoryCount;
+    const barGap = 3;
+    const barWidth = Math.max(2, (groupWidth * 0.72 - Math.max(0, series.length - 1) * barGap) / Math.max(1, series.length));
+    for (let categoryIndex = 0; categoryIndex < categoryCount; categoryIndex += 1) {
+      for (let seriesIndex = 0; seriesIndex < series.length; seriesIndex += 1) {
+        const value = Number(series[seriesIndex].values?.[categoryIndex] ?? 0);
+        const valueY = plot.top + ((max - value) / range) * plotHeight;
+        const top = Math.min(zeroY, valueY);
+        const height = Math.max(1, Math.abs(zeroY - valueY));
+        const bar = figma.createRectangle();
+        bar.name = `${series[seriesIndex].name || 'Series'} · ${categories[categoryIndex] || categoryIndex + 1}`;
+        bar.resize(barWidth, height);
+        bar.x = plot.left + categoryIndex * groupWidth + groupWidth * 0.14 + seriesIndex * (barWidth + barGap);
+        bar.y = top;
+        bar.fills = [solidPaint(chartColor(seriesIndex))];
+        root.appendChild(bar);
+      }
+      const label = await createPrimitiveLabel(categories[categoryIndex] || String(categoryIndex + 1), groupWidth, 22, context, warnings, { fontSize: 10, color: '#667085', align: 'CENTER' });
+      label.x = plot.left + categoryIndex * groupWidth;
+      label.y = plot.bottom + 7;
+      root.appendChild(label);
+    }
+  } else if (chart.chartType === 'bar') {
+    const categoryCount = Math.max(1, categories.length || Math.max(0, ...series.map(item => item.values?.length || 0)));
+    const groupHeight = plotHeight / categoryCount;
+    const barGap = 3;
+    const barHeight = Math.max(2, (groupHeight * 0.72 - Math.max(0, series.length - 1) * barGap) / Math.max(1, series.length));
+    for (let categoryIndex = 0; categoryIndex < categoryCount; categoryIndex += 1) {
+      const label = await createPrimitiveLabel(categories[categoryIndex] || String(categoryIndex + 1), Math.max(1, plot.left - 8), groupHeight, context, warnings, { fontSize: 10, color: '#667085', align: 'RIGHT' });
+      label.x = 0; label.y = plot.top + categoryIndex * groupHeight; root.appendChild(label);
+      for (let seriesIndex = 0; seriesIndex < series.length; seriesIndex += 1) {
+        const value = Number(series[seriesIndex].values?.[categoryIndex] ?? 0);
+        const valueX = plot.left + ((value - min) / range) * plotWidth;
+        const left = Math.min(zeroX, valueX);
+        const width = Math.max(1, Math.abs(zeroX - valueX));
+        const bar = figma.createRectangle();
+        bar.name = `${series[seriesIndex].name || 'Series'} · ${categories[categoryIndex] || categoryIndex + 1}`;
+        bar.resize(width, barHeight);
+        bar.x = left;
+        bar.y = plot.top + categoryIndex * groupHeight + groupHeight * 0.14 + seriesIndex * (barHeight + barGap);
+        bar.fills = [solidPaint(chartColor(seriesIndex))];
+        root.appendChild(bar);
+      }
+    }
+  } else if (chart.chartType === 'line') {
+    const pointCount = Math.max(1, categories.length || Math.max(0, ...series.map(item => item.values?.length || 0)));
+    const xFor = index => pointCount <= 1 ? plot.left + plotWidth / 2 : plot.left + index / (pointCount - 1) * plotWidth;
+    const yFor = value => plot.top + ((max - value) / range) * plotHeight;
+    for (let seriesIndex = 0; seriesIndex < series.length; seriesIndex += 1) {
+      const current = series[seriesIndex];
+      const points = (current.values || []).map((value, index) => ({ x: xFor(index), y: yFor(Number(value || 0)) }));
+      for (let index = 0; index < points.length - 1; index += 1) {
+        const a = points[index]; const b = points[index + 1];
+        const dx = b.x - a.x; const dy = b.y - a.y;
+        const segment = figma.createLine();
+        segment.name = `${current.name || 'Series'} segment ${index + 1}`;
+        segment.resize(Math.max(0.01, Math.hypot(dx, dy)), 0.01);
+        segment.x = a.x; segment.y = a.y;
+        segment.rotation = -Math.atan2(dy, dx) * 180 / Math.PI;
+        segment.strokes = [solidPaint(chartColor(seriesIndex))]; segment.strokeWeight = 2;
+        root.appendChild(segment);
+      }
+      points.forEach((point, index) => {
+        const dot = figma.createEllipse();
+        dot.name = `${current.name || 'Series'} point ${index + 1}`;
+        dot.resize(7, 7); dot.x = point.x - 3.5; dot.y = point.y - 3.5; dot.fills = [solidPaint(chartColor(seriesIndex))];
+        root.appendChild(dot);
+      });
+    }
+    for (let categoryIndex = 0; categoryIndex < pointCount; categoryIndex += 1) {
+      const label = await createPrimitiveLabel(categories[categoryIndex] || String(categoryIndex + 1), Math.min(100, plotWidth / pointCount + 20), 22, context, warnings, { fontSize: 10, color: '#667085', align: 'CENTER' });
+      label.x = xFor(categoryIndex) - label.width / 2; label.y = plot.bottom + 7; root.appendChild(label);
+    }
+  } else if (chart.chartType === 'pie' || chart.chartType === 'doughnut') {
+    const sliceValues = series[0]?.values || [];
+    const total = sliceValues.reduce((sum, value) => sum + Math.max(0, Number(value) || 0), 0);
+    const size = Math.max(1, Math.min(plotWidth, plotHeight));
+    let angle = -Math.PI / 2;
+    sliceValues.forEach((value, index) => {
+      const positive = Math.max(0, Number(value) || 0);
+      const sweep = total > 0 ? positive / total * Math.PI * 2 : 0;
+      const slice = figma.createEllipse();
+      slice.name = categories[index] || `Slice ${index + 1}`;
+      slice.resize(size, size);
+      slice.x = plot.left + (plotWidth - size) / 2;
+      slice.y = plot.top + (plotHeight - size) / 2;
+      slice.fills = [solidPaint(chartColor(index))];
+      safeSet(slice, 'arcData', { startingAngle: angle, endingAngle: angle + sweep, innerRadius: chart.chartType === 'doughnut' ? 0.58 : 0 }, warnings, `chart:${element.id}:slice`);
+      root.appendChild(slice);
+      angle += sweep;
+    });
+  } else {
+    warnings.push(`chart:${element.id}: ${chart.chartType} has no editable primitive renderer yet; a placeholder was used`);
+    const placeholder = figma.createFrame();
+    placeholder.name = `Unsupported ${chart.chartType} chart`;
+    placeholder.resize(plotWidth, plotHeight);
+    placeholder.x = plot.left; placeholder.y = plot.top; placeholder.fills = []; placeholder.strokes = [solidPaint('#F59E0B')]; placeholder.dashPattern = [8, 6];
+    root.appendChild(placeholder);
+  }
+
+  if (chart.insightStatement) {
+    const insight = await createPrimitiveLabel(chart.insightStatement, Math.max(1, element.geometry.width - 20), 18, context, warnings, { fontSize: 10, color: '#475467' });
+    insight.x = 10; insight.y = 0; root.appendChild(insight);
+  }
+  return root;
+}
+
 function createUnsupported(element, warnings) {
   const node = figma.createFrame();
   node.name = `[Pitch unsupported ${element.type}] ${element.name || element.id}`;
@@ -319,6 +528,8 @@ async function createLeaf(element, bundle, context, warnings) {
   if (element.type === 'image') return createImageNode(element, bundle, warnings);
   if (element.type === 'shape') return createShape(element, warnings);
   if (element.type === 'line') return createLine(element, warnings);
+  if (element.type === 'table') return createTableNode(element, context, warnings);
+  if (element.type === 'chart') return createChartNode(element, context, warnings);
   return createUnsupported(element, warnings);
 }
 
@@ -329,9 +540,7 @@ async function createElementRecursive(element, parentNode, parentElement, sceneI
     node.name = element.name || (element.type === 'group' ? 'Group' : 'Frame');
     resizeNode(node, element.geometry, warnings, `${element.type}:${element.id}`);
     configureFrameAppearance(node, element, warnings);
-  } else {
-    node = await createLeaf(element, bundle, context, warnings);
-  }
+  } else node = await createLeaf(element, bundle, context, warnings);
 
   setPluginIdentity(node, element);
   parentNode.appendChild(node);
@@ -341,10 +550,7 @@ async function createElementRecursive(element, parentNode, parentElement, sceneI
   if (isContainer(element)) {
     for (const childId of element.childIds || []) {
       const child = sceneIndex.get(childId);
-      if (!child) {
-        warnings.push(`${element.type}:${element.id}: missing canonical child ${childId}`);
-        continue;
-      }
+      if (!child) { warnings.push(`${element.type}:${element.id}: missing canonical child ${childId}`); continue; }
       await createElementRecursive(child, node, element, sceneIndex, bundle, context, warnings, created);
     }
     configureAutoLayout(node, element, created, warnings);
@@ -380,9 +586,7 @@ async function makeSlideContainer(slide, deck, index, warnings) {
 }
 
 async function importBundle(bundle) {
-  if (!bundle || bundle.kind !== 'pitch-figma-bridge' || bundle.schemaVersion !== '0.1') {
-    throw new Error('Unsupported Pitch Figma bridge bundle');
-  }
+  if (!bundle || bundle.kind !== 'pitch-figma-bridge' || bundle.schemaVersion !== '0.1') throw new Error('Unsupported Pitch Figma bridge bundle');
   const deck = bundle.deck;
   const warnings = (bundle.warnings || []).map(w => `${w.elementId}: ${w.message}`);
   const availableFonts = await figma.listAvailableFontsAsync();
