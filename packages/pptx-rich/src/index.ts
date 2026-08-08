@@ -1,14 +1,14 @@
 import { createHash } from "node:crypto";
 import { readFile, rm, writeFile } from "node:fs/promises";
 import { extname } from "node:path";
-import type { DeckDocument, ImageElement, TableElement } from "../../deck-model/src/index.js";
+import type { DeckDocument, FrameElement, ImageElement, ShapeElement, TableElement } from "../../deck-model/src/index.js";
 import { compileDeckToPptx, type PptxCompileResult } from "../../pptx/src/index.js";
 import { inflateRawSync } from "node:zlib";
 
 export interface RichAsset { path: string; mimeType?: "image/png" | "image/jpeg"; }
 export interface RichCompileOptions { assets: Record<string, RichAsset>; }
 export interface RichPptxCompileResult extends PptxCompileResult {
-  richElementResults: Array<{ elementId: string; strategy: "native"; kind: "image" | "table"; warnings: string[] }>;
+  richElementResults: Array<{ elementId: string; strategy: "native"; kind: "image" | "table" | "frame"; warnings: string[] }>;
 }
 const DU_TO_EMU = 914400 / 144;
 function emu(value: number): number { return Math.round(value * DU_TO_EMU); }
@@ -26,12 +26,14 @@ function cellXml(text:string):string{return`<a:tc><a:txBody><a:bodyPr/><a:lstSty
 function tableXml(table:TableElement,shapeId:number):string{const g=table.geometry,rows=table.rows.length||1,cols=Math.max(1,...table.rows.map(r=>r.length)),widths=table.columnWidths?.length===cols?table.columnWidths:Array.from({length:cols},()=>1/cols),sum=widths.reduce((a,b)=>a+b,0)||1,colXml=widths.map(w=>`<a:gridCol w="${Math.round(emu(g.width)*(w/sum))}"/>`).join(''),rowHeight=Math.round(emu(g.height)/rows),rowsXml=table.rows.map(row=>`<a:tr h="${rowHeight}">${Array.from({length:cols},(_,i)=>cellXml(row[i]?.text??'' )).join('')}</a:tr>`).join('');return`<p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="${shapeId}" name="${xml(table.name||table.id)}"/><p:cNvGraphicFramePr/><p:nvPr/></p:nvGraphicFramePr><p:xfrm><a:off x="${emu(g.x)}" y="${emu(g.y)}"/><a:ext cx="${emu(g.width)}" cy="${emu(g.height)}"/></p:xfrm><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/table"><a:tbl><a:tblPr firstRow="1" bandRow="1"><a:tableStyleId>{5C22544A-7EE6-4342-B048-85BDC9FD1C3A}</a:tableStyleId></a:tblPr><a:tblGrid>${colXml}</a:tblGrid>${rowsXml}</a:tbl></a:graphicData></a:graphic></p:graphicFrame>`}
 function inject(xmlText:string,fragment:string):string{if(!xmlText.includes('</p:spTree>'))throw new Error('Slide spTree not found');return xmlText.replace('</p:spTree>',`${fragment}</p:spTree>`)}
 function mimeFor(asset:RichAsset):{mime:string;ext:string}{if(asset.mimeType==='image/png')return{mime:'image/png',ext:'png'};if(asset.mimeType==='image/jpeg')return{mime:'image/jpeg',ext:'jpg'};const ext=extname(asset.path).toLowerCase();if(ext==='.png')return{mime:'image/png',ext:'png'};if(ext==='.jpg'||ext==='.jpeg')return{mime:'image/jpeg',ext:'jpg'};throw new Error(`Unsupported image asset: ${asset.path}`)}
+function frameAsShape(frame:FrameElement):ShapeElement|null{if(!frame.fill&&!frame.stroke)return null;return{id:frame.id,type:'shape',name:frame.name,semanticRole:frame.semanticRole,geometry:frame.geometry,zIndex:frame.zIndex,locked:frame.locked,groupId:frame.groupId,layoutItem:frame.layoutItem,opacity:frame.opacity,origin:frame.origin,exportStrategy:'native',dependencies:frame.dependencies,tags:frame.tags,shape:frame.radiusDU?'roundRect':'rect',fill:frame.fill,stroke:frame.stroke,radiusDU:frame.radiusDU}}
 
 export async function compileRichDeckToPptx(deck:DeckDocument,outputPath:string,options:RichCompileOptions):Promise<RichPptxCompileResult>{
   const basePath=`${outputPath}.base-${Date.now()}.pptx`;
   const richBySlide=deck.slides.map(slide=>slide.scene.filter((e):e is ImageElement|TableElement=>e.type==='image'||e.type==='table'));
-  const baseDeck:DeckDocument={...deck,slides:deck.slides.map(slide=>({...slide,scene:slide.scene.filter(e=>e.type!=='image'&&e.type!=='table')}))};
-  const base=await compileDeckToPptx(baseDeck,basePath);const entries=readZip(await readFile(basePath));let contentTypes=entries.get('[Content_Types].xml')?.toString('utf8')??'';const richElementResults:RichPptxCompileResult['richElementResults']=[];let mediaIndex=1;
+  const structuralFrames=deck.slides.flatMap(slide=>slide.scene.filter((e):e is FrameElement=>e.type==='frame'&&!e.fill&&!e.stroke));
+  const baseDeck:DeckDocument={...deck,slides:deck.slides.map(slide=>({...slide,scene:slide.scene.flatMap(e=>{if(e.type==='image'||e.type==='table')return[];if(e.type==='frame'){const shape=frameAsShape(e);return shape?[shape]:[]}return[e]})))};
+  const base=await compileDeckToPptx(baseDeck,basePath);const entries=readZip(await readFile(basePath));let contentTypes=entries.get('[Content_Types].xml')?.toString('utf8')??'';const richElementResults:RichPptxCompileResult['richElementResults']=structuralFrames.map(frame=>({elementId:frame.id,strategy:'native',kind:'frame',warnings:['Structural auto-layout frame flattened to absolute child geometry for PowerPoint']}));let mediaIndex=1;
   for(let slideIndex=0;slideIndex<deck.slides.length;slideIndex++){
     const rich=richBySlide[slideIndex];if(!rich.length)continue;const slidePath=`ppt/slides/slide${slideIndex+1}.xml`,relsPath=`ppt/slides/_rels/slide${slideIndex+1}.xml.rels`;let slideXml=entries.get(slidePath)?.toString('utf8');if(!slideXml)throw new Error(`Missing ${slidePath}`);let rels=entries.get(relsPath)?.toString('utf8')??relsRoot();let relIndex=100;
     for(const element of rich){if(element.type==='image'){const asset=options.assets[element.assetId];if(!asset)throw new Error(`Missing image asset ${element.assetId}`);const {mime,ext}=mimeFor(asset),mediaName=`image${mediaIndex++}.${ext}`,mediaPath=`ppt/media/${mediaName}`,relId=`rIdRich${relIndex++}`;entries.set(mediaPath,await readFile(asset.path));contentTypes=ensureContentType(contentTypes,ext,mime);rels=addRelationship(rels,relId,`../media/${mediaName}`);slideXml=inject(slideXml,pictureXml(element,relId,2000+relIndex,element.name||element.id));richElementResults.push({elementId:element.id,strategy:'native',kind:'image',warnings:[]})}else{slideXml=inject(slideXml,tableXml(element,3000+relIndex++));richElementResults.push({elementId:element.id,strategy:'native',kind:'table',warnings:[]})}}
