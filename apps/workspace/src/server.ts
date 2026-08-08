@@ -7,7 +7,7 @@ import { applyDeckMutation, createMutation, deckHash, type DeckMutationOperation
 import { runDeterministicQA } from "../../../packages/qa/src/index.js";
 import { compileDeckToPptx } from "../../../packages/pptx/src/index.js";
 import { VersionJournal } from "../../../packages/version-history/src/index.js";
-import { workspaceHtml } from "./ui.js";
+import { editorSpikeHtml, workspaceHtml } from "./ui.js";
 
 function json(res: any, status: number, value: unknown): void {
   res.writeHead(status, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
@@ -22,7 +22,7 @@ async function body(req: any): Promise<any> {
 function activeHeadByKind(manifest: ProjectManifest, kind: string): BranchArtifactHead | undefined {
   return Object.values(manifest.branches[manifest.activeBranchId]?.heads ?? {}).find((head) => head.kind === kind);
 }
-async function staticAsset(name: "workspace.css" | "workspace.js"): Promise<string> {
+async function staticAsset(name: "workspace.css" | "workspace.js" | "editor-spike.js"): Promise<string> {
   return readFile(resolve("apps", "workspace", "public", name), "utf8");
 }
 
@@ -102,8 +102,10 @@ export function createWorkspaceServer(projectRoot: string) {
     try {
       const url = new URL(req.url ?? "/", "http://local");
       if (req.method === "GET" && url.pathname === "/") { res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" }); res.end(workspaceHtml()); return; }
+      if (req.method === "GET" && url.pathname === "/editor-spike") { res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" }); res.end(editorSpikeHtml()); return; }
       if (req.method === "GET" && url.pathname === "/workspace.css") { res.writeHead(200, { "content-type": "text/css; charset=utf-8", "cache-control": "no-store" }); res.end(await staticAsset("workspace.css")); return; }
       if (req.method === "GET" && url.pathname === "/workspace.js") { res.writeHead(200, { "content-type": "text/javascript; charset=utf-8", "cache-control": "no-store" }); res.end(await staticAsset("workspace.js")); return; }
+      if (req.method === "GET" && url.pathname === "/editor-spike.js") { res.writeHead(200, { "content-type": "text/javascript; charset=utf-8", "cache-control": "no-store" }); res.end(await staticAsset("editor-spike.js")); return; }
       if (req.method === "GET" && url.pathname === "/api/project") { json(res, 200, await service.state()); return; }
       if (req.method === "POST" && url.pathname === "/api/mutate") { json(res, 200, await service.mutate(await body(req))); return; }
       if (req.method === "POST" && url.pathname === "/api/branch") { const data = await body(req); if (!data.name) throw new Error("Branch name required"); json(res, 200, await service.fork(data.name)); return; }
