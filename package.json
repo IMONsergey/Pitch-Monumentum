@@ -28,6 +28,7 @@
     "infinite-viewer": "^0.29.1",
     "lexical": "^0.48.0",
     "moveable": "^0.53.0",
+    "perfect-freehand": "^1.2.2",
     "selecto": "^1.26.3",
     "yoga-layout": "^3.2.1",
     "zod": "^4.2.0"
