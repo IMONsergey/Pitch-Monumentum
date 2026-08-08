@@ -1,8 +1,8 @@
 import type { DeckDocument, Geometry, SlideDocument } from "../../deck-model/src/index.js";
 import { applyDeckMutation, createMutation, type AppliedDeckMutation, type DeckMutationOperation, type ElementAppearancePatch, type ElementStylePatch } from "../../mutations/src/index.js";
 import { executeEditorCommand } from "../../editor-commands/src/service.js";
-import { deleteVectorAnchor, splitVectorSegment } from "../../vector-path/src/edit.js";
-import { moveVectorAnchor, moveVectorHandle } from "../../vector-path/src/index.js";
+import { splitVectorSegment } from "../../vector-path/src/edit.js";
+import { deleteEditableVectorAnchor, moveEditableVectorAnchor, moveEditableVectorHandle } from "../../vector-path/src/topology.js";
 import {
   alignSelection,
   arrangeSelection,
@@ -291,9 +291,9 @@ export function executePitchEditVectorTool(deck: DeckDocument, call: PitchEditVe
   const element = slide.scene.find((item) => item.id === args.elementId);
   if (!element || element.type !== "shape" || element.shape !== "custom" || !element.pathData) throw new Error(`Element ${args.elementId} is not a structured editable vector`);
   let path = element.pathData;
-  if (args.operation === "moveAnchor") path = moveVectorAnchor(path, args.commandIndex, requireValue(args.x, "x"), requireValue(args.y, "y"), args.moveHandles ?? true);
-  else if (args.operation === "moveHandle") path = moveVectorHandle(path, args.commandIndex, requireValue(args.handle, "handle"), requireValue(args.x, "x"), requireValue(args.y, "y"));
-  else if (args.operation === "deleteAnchor") path = deleteVectorAnchor(path, args.commandIndex);
+  if (args.operation === "moveAnchor") path = moveEditableVectorAnchor(path, args.commandIndex, requireValue(args.x, "x"), requireValue(args.y, "y"), args.moveHandles ?? true);
+  else if (args.operation === "moveHandle") path = moveEditableVectorHandle(path, args.commandIndex, requireValue(args.handle, "handle"), requireValue(args.x, "x"), requireValue(args.y, "y"));
+  else if (args.operation === "deleteAnchor") path = deleteEditableVectorAnchor(path, args.commandIndex);
   else path = splitVectorSegment(path, args.commandIndex, args.t ?? 0.5);
 
   const executed = executeEditorCommand(deck, { command: "setVectorPath", slideId: slide.id, elementId: element.id, pathData: path, fitBounds: args.fitBounds });
