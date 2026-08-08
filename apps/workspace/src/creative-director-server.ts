@@ -5,6 +5,7 @@ import { createMasterDesignWorkspaceServer } from "./master-design-server.js";
 import { CreativeDirectorRuntime, type CreativeDirectorPreparation } from "../../creative-director/src/runtime.js";
 import { executeCreativeSafeFixes, previewCreativeSafeFixes } from "../../creative-director/src/autofix-runtime.js";
 import { acceptCreativePreview, discardCreativePreview, reviewCreativePreview } from "../../creative-director/src/branch-review.js";
+import { listCreativeRuns, readCreativeRun } from "../../creative-director/src/audit-runtime.js";
 import type { CreativeChangeRequest } from "../../../packages/creative-director/src/index.js";
 import type { CreativeExecutionBundle } from "../../../packages/creative-director/src/execution.js";
 
@@ -68,7 +69,17 @@ export function createCreativeDirectorWorkspaceServer(projectRoot: string) {
         const reviewed = await director.review();
         const activeBranch = reviewed.state.manifest.branches[reviewed.state.manifest.activeBranchId];
         const previewReview = activeBranch?.parentBranchId ? await reviewCreativePreview(director.service, activeBranch.id).catch((error) => ({ error: error instanceof Error ? error.message : String(error) })) : null;
-        json(res, 200, { ...compactReview(reviewed), previewReview });
+        json(res, 200, { ...compactReview(reviewed), previewReview, recentRuns: await listCreativeRuns(director.service, reviewed.state.manifest.activeBranchId) });
+        return;
+      }
+      if (req.method === "GET" && url.pathname === "/api/creative-runs") {
+        json(res, 200, { runs: await listCreativeRuns(director.service, url.searchParams.get("branchId") ?? undefined) });
+        return;
+      }
+      if (req.method === "GET" && url.pathname === "/api/creative-run") {
+        const runId = url.searchParams.get("runId");
+        if (!runId) throw new Error("runId is required");
+        json(res, 200, await readCreativeRun(director.service, runId, url.searchParams.get("branchId") ?? undefined));
         return;
       }
       if (req.method === "GET" && url.pathname === "/api/creative-preview-review") {
