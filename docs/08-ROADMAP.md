@@ -28,8 +28,6 @@ The canonical project is the source of truth. Export formats are outputs, not th
 
 ## M0 — Canonical PitchOS foundation — DONE
 
-Core platform:
-
 - Deck/Slide/Scene document contracts;
 - artifact store and content hashes;
 - branch heads;
@@ -39,11 +37,9 @@ Core platform:
 - Codex gateway foundations;
 - native PPTX/HTML foundations.
 
-Exit condition: a presentation can exist as a stable, versioned semantic project rather than a collection of rendered slide screenshots.
+Exit condition reached: a presentation exists as a stable, versioned semantic project rather than a collection of rendered slide screenshots.
 
 ## M1 — Pro Editor & editable output parity — DONE
-
-Professional visual editing:
 
 - production canvas interaction engine;
 - selection/transform/arrange/alignment/distribution;
@@ -59,13 +55,9 @@ Professional visual editing:
 - Codex editor-command parity;
 - expanded native PPTX parity.
 
-Exit condition: Pitch behaves like an actual editor rather than a generated-deck viewer.
+Exit condition reached: Pitch behaves like an actual editor rather than a generated-deck viewer.
 
-## M2 — Motion, Components & Presenter — CURRENT MILESTONE
-
-This milestone turns static editing into a presentation-production environment.
-
-Scope:
+## M2 — Motion, Components & Presenter — DONE
 
 - canonical `MotionDocument` sidecar;
 - transitions;
@@ -74,7 +66,7 @@ Scope:
 - independent motion history;
 - reusable component definitions;
 - text/image/fill/stroke component slots;
-- component insertion and detach;
+- component insertion/detach;
 - Media Inspector and non-destructive image crop/fit;
 - live Motion Studio;
 - Component Library UI;
@@ -83,72 +75,77 @@ Scope:
 - Codex/MCP tools for motion, media and components;
 - context preservation across state reloads.
 
-Exit condition: the same presentation can be authored, animated, componentized and presented without leaving the canonical Pitch project.
+Exit condition reached: the same presentation can be authored, animated, componentized and presented without leaving the canonical Pitch project.
 
-## M3 — Asset & Media Production — NEXT
+## M3 — Asset & Media Production — CORE DONE / ADVANCED MEDIA NEXT
 
-This is the next highest-value gap because professional decks are media-heavy and current image objects still need a full production asset path.
+### Completed asset production core
 
-### Asset system
+- project-local content-addressed image asset store;
+- PNG/JPEG byte validation and canonical dimension extraction;
+- SHA-256 duplicate detection;
+- drag/drop, file picker and clipboard image import;
+- searchable/reusable Assets Library;
+- usage counts and safe deletion;
+- replace asset while preserving ImageElement geometry/crop;
+- real image rendering in editor and Presenter;
+- canonical `insertImage` editor/Codex path;
+- project asset resolution into native PPTX picture objects;
+- missing-byte integrity failure instead of silent export degradation.
 
-- project asset store;
-- drag/drop and file picker upload;
-- paste/import from clipboard;
-- thumbnail generation;
-- metadata, dimensions, checksum, source/provenance;
-- duplicate detection;
-- folders/tags/search/recent assets;
-- replace asset while preserving object geometry/crop;
-- brand asset collections.
+### Remaining advanced image work
 
-### Image editing
-
-- real image rendering in canvas/presenter/export;
-- interactive crop mode;
+- direct crop mode with handles;
 - focal point;
-- masks and arbitrary vector clipping;
+- arbitrary vector clipping/masks;
 - background removal adapter;
-- opacity/blend controls where export supports them;
-- image treatments tied to design tokens.
+- generative image adapter with provenance/prompt history;
+- image treatments/blend controls tied to design tokens;
+- thumbnail/cache optimization for very large libraries;
+- folders/tags/brand asset collections.
 
-### Generative media
+### Remaining video/audio work
 
-- create image from Codex/editor command;
-- reference-image workflows;
-- generated result enters the same asset store, never a special one-off path;
-- provenance and prompt history;
-- regenerate/variation/replace while preserving layout.
+- production video ingestion;
+- poster-frame authoring;
+- trim/start/autoplay semantics;
+- audio objects;
+- presenter playback semantics;
+- explicit export fallbacks for formats without native media parity.
 
-### Video/audio
+Core exit condition reached for still images: imported media uses one project-native asset system. Full M3 closes after advanced still-image and video/audio production are finished.
 
-- video element type;
-- poster frame;
-- trim/start behavior;
-- autoplay/manual playback presentation semantics;
-- audio object and speaker/presenter use cases;
-- export fallbacks for formats that cannot preserve native media.
+## M4 — Component System 2.0 & Design Systems — CORE DONE / DESIGN SYSTEM LAYER NEXT
 
-Exit condition: generated, imported and manually edited media all use one production-grade asset system.
+### Completed Component 2.0 core
 
-## M4 — Component system 2.0 & Design Systems
+- linked master/instance identity;
+- stable source-element mapping;
+- instance registry derived from canonical deck state;
+- master update from selected object tree;
+- master structural/visual change propagation to all linked instances;
+- preservation of text/image/fill/stroke slot overrides;
+- safe stale-override removal when slots disappear;
+- Sync All;
+- Reset Instance to master;
+- detach while preserving normal editable objects;
+- instance insertion above existing scene content with preserved internal z-order;
+- manual UI and Codex/MCP parity;
+- regression coverage for propagation and reset.
 
-Move from reusable local objects to scalable presentation systems.
+### Remaining design-system layer
 
-- master component update propagation;
-- variants and typed component properties;
-- nested instances;
-- controlled instance overrides;
-- detach/reset override;
-- shared component libraries;
-- design tokens for color/type/spacing/effects;
-- theme switch across a deck;
-- brand-lock rules;
-- design-system QA;
-- reusable slide templates/archetypes built on components rather than hard-coded layouts.
+- typed component properties/variants;
+- nested component instances;
+- shared/team component libraries;
+- first-class color/type/spacing/effect tokens;
+- deck-wide themes;
+- brand locks and design-system QA;
+- reusable slide templates/archetypes built on components.
 
-Exit condition: a 100-slide deck can be restyled and maintained as a system, not edited slide by slide.
+Core exit condition reached: linked components can be maintained as masters rather than copied objects. Full M4 closes when variants/tokens/shared libraries are production-ready.
 
-## M5 — AI Creative Director / Agentic production loop
+## M5 — AI Creative Director / Agentic production loop — NEXT MAJOR PRODUCT MILESTONE
 
 Turn Codex from an editor operator into an autonomous but inspectable presentation production partner.
 
@@ -160,16 +157,14 @@ Turn Codex from an editor operator into an autonomous but inspectable presentati
 - layout critique with actionable fixes;
 - automatic adaptation from a master slide/KV;
 - visual dependency tracking;
-- “change master → propose updates to dependent slides”;
+- master/component-aware deck-wide update proposals;
 - side-by-side alternatives/branches;
 - agent change preview before commit for wide-scope actions;
 - quality/evidence gates before export.
 
-Exit condition: a user can ask for a strategic or visual change in natural language and Codex can plan, execute and verify it through the same editor model.
+Exit condition: a user can ask for a strategic or visual change in natural language and Codex can plan, execute and verify it through the same editor/assets/components model.
 
 ## M6 — Collaboration, branches and review
-
-Bring Git-like safety into a visual presentation workflow without exposing Git complexity to normal users.
 
 - named versions/checkpoints;
 - branch browser;
@@ -185,8 +180,6 @@ Bring Git-like safety into a visual presentation workflow without exposing Git c
 Exit condition: teams and agents can work in parallel without duplicating PPTX files or overwriting accepted work.
 
 ## M7 — Interop & export hardening
-
-Professional output must not lock the user into Pitch.
 
 ### PowerPoint
 
@@ -237,14 +230,13 @@ Exit condition: Pitch scales from one deck to a company's presentation operating
 
 ---
 
-## Near-term order after M2
+## Immediate order from the current branch
 
-The practical implementation order is:
+1. **Release freeze / Desktop Preview** — get strict CI green, package and smoke-test verified x86_64 DMG, then merge the milestone.
+2. **Advanced Media** — crop handles, focal point, masks, generation/background removal and video/audio.
+3. **Variants & Design Tokens** — finish Component/Design System 2.0 beyond the linked-instance core.
+4. **AI Creative Director loop** — exploit canonical assets/components/motion for high-value deck-wide agentic changes.
+5. **Collaboration/visual branches** — parallel human/agent workflows.
+6. **Figma/Keynote/PPTX hardening** — professional interoperability.
 
-1. **Asset & Media Production** — unblock real image-heavy professional work.
-2. **Component System 2.0 / Design Systems** — make large decks maintainable.
-3. **AI Creative Director loop** — exploit the canonical editor model for high-value agentic work.
-4. **Collaboration/visual branches** — support real team workflows.
-5. **Figma/Keynote/PPTX hardening** — finish professional interoperability.
-
-This order intentionally favors the editor's production core before adding marketplace, growth, template-community or other peripheral product layers.
+This order keeps the production core ahead of marketplace, template-community, growth and other peripheral layers.
