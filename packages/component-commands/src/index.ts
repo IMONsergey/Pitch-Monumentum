@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { SceneElement, SlideDocument } from "../../deck-model/src/index.js";
-import type { DeckMutationOperation } from "../../mutations/src/index.js";
+import type { DeckDocument, SceneElement, SlideDocument } from "../../deck-model/src/index.js";
 import {
   instantiateComponent,
   type ComponentDefinition,
@@ -18,7 +17,8 @@ export interface CreateComponentInput {
 }
 
 export interface InstantiateComponentInput {
-  slide: SlideDocument;
+  deck: DeckDocument;
+  slideId: string;
   definition: ComponentDefinition;
   transform: ComponentInstanceTransform;
   overrides?: ComponentOverride[];
@@ -95,24 +95,66 @@ export function createComponentDefinitionFromSelection(input: CreateComponentInp
   };
 }
 
-export function instantiateComponentOperations(input: InstantiateComponentInput) {
+export function instantiateComponentIntoDeck(input: InstantiateComponentInput) {
+  const slide = input.deck.slides.find((item) => item.id === input.slideId);
+  if (!slide) throw new Error(`Unknown slide: ${input.slideId}`);
   const built = instantiateComponent(input.definition, input.transform, input.overrides ?? [], input.instanceId);
-  const existingIds = new Set(input.slide.scene.map((element) => element.id));
+  const existingIds = new Set(input.deck.slides.flatMap((item) => item.scene.map((element) => element.id)));
   for (const element of built.elements) if (existingIds.has(element.id)) throw new Error(`Component element id already exists: ${element.id}`);
-  const operations: DeckMutationOperation[] = built.elements.map((element) => ({ op: "addElement", slideId: input.slide.id, element }));
-  return { operations, instance: built.instance, nextSelectionIds: built.instance.rootIds };
+  const taggedElements = built.elements.map((element) => ({
+    ...element,
+    tags: [...new Set([...(element.tags ?? []), `component-def:${input.definition.id}`])],
+  })) as SceneElement[];
+  const deck: DeckDocument = {
+    ...input.deck,
+    updatedAt: new Date().toISOString(),
+    slides: input.deck.slides.map((item) => item.id === slide.id ? {
+      ...item,
+      status: "draft",
+      scene: [...item.scene, ...taggedElements],
+    } : item),
+  };
+  return {
+    deck,
+    changed: true,
+    reason: `Insert component ${input.definition.name}`,
+    instance: built.instance,
+    affectedSlideIds: [slide.id],
+    affectedElementIds: taggedElements.map((element) => element.id),
+    nextSelectionIds: built.instance.rootIds,
+  };
 }
 
-export function detachComponentOperations(slide: SlideDocument, instanceId: string): { operations: DeckMutationOperation[]; affectedIds: string[] } {
+export function detachComponentFromDeck(deck: DeckDocument, slideId: string, instanceId: string) {
   if (!instanceId.trim()) throw new Error("Component instance id is required");
+  const slide = deck.slides.find((item) => item.id === slideId);
+  if (!slide) throw new Error(`Unknown slide: ${slideId}`);
   const tag = `component:${instanceId}`;
-  const affected = slide.scene.filter((element) => element.tags?.includes(tag));
-  if (!affected.length) throw new Error(`No component instance ${instanceId} on slide ${slide.id}`);
-  const operations: DeckMutationOperation[] = affected.map((element) => ({
-    op: "updateElementPresentation",
-    slideId: slide.id,
-    elementId: element.id,
-    changes: { tags: (element.tags ?? []).filter((value) => value !== tag && !value.startsWith("component-def:")) },
-  }));
-  return { operations, affectedIds: affected.map((element) => element.id) };
+  const affectedIds = slide.scene.filter((element) => element.tags?.includes(tag)).map((element) => element.id);
+  if (!affectedIds.length) throw new Error(`No component instance ${instanceId} on slide ${slide.id}`);
+  const affected = new Set(affectedIds);
+  const nextDeck: DeckDocument = {
+    ...deck,
+    updatedAt: new Date().toISOString(),
+    slides: deck.slides.map((item) => item.id === slide.id ? {
+      ...item,
+      status: "draft",
+      scene: item.scene.map((element) => affected.has(element.id) ? {
+        ...element,
+        tags: element.tags?.filter((value) => value !== tag && !value.startsWith("component-def:")),
+      } as SceneElement : element),
+    } : item),
+  };
+  return {
+    deck: nextDeck,
+    changed: true,
+    reason: `Detach component ${instanceId}`,
+    affectedSlideIds: [slide.id],
+    affectedElementIds: affectedIds,
+    nextSelectionIds: affectedIds,
+  };
+}
+
+export function componentInstanceId(element: SceneElement): string | undefined {
+  return element.tags?.find((tag) => tag.startsWith("component:"))?.slice("component:".length);
 }
