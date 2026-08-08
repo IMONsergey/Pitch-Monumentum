@@ -11,7 +11,7 @@ async function project(base: string): Promise<any> {
   return fetch(`${base}/api/project`).then((response) => response.json());
 }
 
-test("Pro Editor keyboard, Layers, lock and structured clipboard mutate canonical project state", async () => {
+test("Pro Editor keyboard, history, Layers, lock and structured clipboard mutate canonical project state", async () => {
   const root = await mkdtemp(join(tmpdir(), "pitch-pro-editor-e2e-"));
   execFileSync(process.execPath, ["dist/apps/cli/src/index.js", "demo", root], { stdio: "inherit" });
   const { server } = createWorkspaceServer(root);
@@ -34,6 +34,17 @@ test("Pro Editor keyboard, Layers, lock and structured clipboard mutate canonica
     await page.locator('#spikeScene [data-id="body"]').click();
     await page.locator("#spikeSelection").getByText("1 selected", { exact: false }).waitFor();
     await page.keyboard.press("ArrowRight");
+    await page.waitForFunction(async (x) => {
+      const next = await fetch("/api/project").then((response) => response.json());
+      return next.deck.slides[0].scene.find((element: any) => element.id === "body")?.geometry.x === x + 1;
+    }, bodyBefore.geometry.x);
+
+    await page.keyboard.press("Control+Z");
+    await page.waitForFunction(async (x) => {
+      const next = await fetch("/api/project").then((response) => response.json());
+      return next.deck.slides[0].scene.find((element: any) => element.id === "body")?.geometry.x === x;
+    }, bodyBefore.geometry.x);
+    await page.keyboard.press("Control+Shift+Z");
     await page.waitForFunction(async (x) => {
       const next = await fetch("/api/project").then((response) => response.json());
       return next.deck.slides[0].scene.find((element: any) => element.id === "body")?.geometry.x === x + 1;
