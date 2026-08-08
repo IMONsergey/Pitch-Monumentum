@@ -4,7 +4,7 @@ import { join, resolve } from "node:path";
 import { ArtifactStore, type ProjectManifest, type BranchArtifactHead } from "../../../packages/artifact-store/src/index.js";
 import type { AutoLayoutSpec, DeckDocument } from "../../../packages/deck-model/src/index.js";
 import { applyDeckMutation, createMutation, deckHash, type DeckMutationOperation } from "../../../packages/mutations/src/index.js";
-import { setAutoLayoutMutationOperations } from "../../../packages/auto-layout/src/index.js";
+import { setAutoLayoutMutationOperations, wrapSelectionInAutoLayoutOperations } from "../../../packages/auto-layout/src/index.js";
 import { runDeterministicQA } from "../../../packages/qa/src/index.js";
 import { compileDeckToPptx } from "../../../packages/pptx/src/index.js";
 import { VersionJournal } from "../../../packages/version-history/src/index.js";
@@ -72,11 +72,30 @@ export class PitchWorkspaceService {
     const slide = current.deck.slides.find((item) => item.id === input.slideId);
     if (!slide) throw new Error(`Unknown slide: ${input.slideId}`);
     const operations = setAutoLayoutMutationOperations(slide, input.elementId, input.layout);
-    return this.mutate({
-      reason: `Set auto layout on ${input.elementId}`,
-      operations,
-      expectedDeckHash: current.deckHash,
+    return this.mutate({ reason: `Set auto layout on ${input.elementId}`, operations, expectedDeckHash: current.deckHash });
+  }
+
+  async wrapSelectionInAutoLayout(input: {
+    slideId: string;
+    selectedIds: string[];
+    direction?: AutoLayoutSpec["direction"];
+    gapDU?: number;
+    paddingDU?: number;
+    expectedDeckHash?: string;
+  }) {
+    const current = await this.state();
+    if (input.expectedDeckHash && input.expectedDeckHash !== current.deckHash) {
+      throw new Error(`Deck changed since auto-layout wrap was authored: expected ${input.expectedDeckHash}, got ${current.deckHash}`);
+    }
+    const slide = current.deck.slides.find((item) => item.id === input.slideId);
+    if (!slide) throw new Error(`Unknown slide: ${input.slideId}`);
+    const built = wrapSelectionInAutoLayoutOperations(slide, input.selectedIds, {
+      direction: input.direction,
+      gapDU: input.gapDU,
+      paddingDU: input.paddingDU,
     });
+    const next = await this.mutate({ reason: `Wrap selection in auto layout ${built.frameId}`, operations: built.operations, expectedDeckHash: current.deckHash });
+    return { ...next, createdFrameId: built.frameId };
   }
 
   async fork(name: string) {
@@ -128,6 +147,12 @@ export function createWorkspaceServer(projectRoot: string) {
         const data = await body(req);
         if (!data.slideId || !data.elementId || !data.layout) throw new Error("slideId, elementId and layout are required");
         json(res, 200, await service.setAutoLayout(data));
+        return;
+      }
+      if (req.method === "POST" && url.pathname === "/api/wrap-auto-layout") {
+        const data = await body(req);
+        if (!data.slideId || !Array.isArray(data.selectedIds)) throw new Error("slideId and selectedIds are required");
+        json(res, 200, await service.wrapSelectionInAutoLayout(data));
         return;
       }
       if (req.method === "POST" && url.pathname === "/api/branch") { const data = await body(req); if (!data.name) throw new Error("Branch name required"); json(res, 200, await service.fork(data.name)); return; }
