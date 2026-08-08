@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import Yoga, {
   Align,
   Direction,
@@ -31,6 +32,15 @@ export interface AutoLayoutResult {
   containerGeometry: Geometry;
   children: AutoLayoutChildResult[];
   warnings: string[];
+}
+
+export interface WrapSelectionInAutoLayoutOptions {
+  frameId?: string;
+  direction?: AutoLayoutSpec["direction"];
+  gapDU?: number;
+  paddingDU?: number;
+  fill?: string;
+  radiusDU?: number;
 }
 
 function justify(value: AutoLayoutSpec["justify"]): Justify {
@@ -193,6 +203,84 @@ export function removeAutoLayoutMutationOperations(slide: SlideDocument, contain
   const container = slide.scene.find((element) => element.id === containerId);
   if (!container || (container.type !== "frame" && container.type !== "group")) throw new Error(`Element ${containerId} is not a frame/group`);
   return [{ op: "updateAutoLayout", slideId: slide.id, elementId: containerId, layout: null }];
+}
+
+function selectedBounds(elements: SceneElement[]): Geometry {
+  const left = Math.min(...elements.map((element) => element.geometry.x));
+  const top = Math.min(...elements.map((element) => element.geometry.y));
+  const right = Math.max(...elements.map((element) => element.geometry.x + element.geometry.width));
+  const bottom = Math.max(...elements.map((element) => element.geometry.y + element.geometry.height));
+  return { x: left, y: top, width: right - left, height: bottom - top };
+}
+
+export function wrapSelectionInAutoLayoutOperations(
+  slide: SlideDocument,
+  selectedIds: string[],
+  options: WrapSelectionInAutoLayoutOptions = {},
+): { frameId: string; operations: DeckMutationOperation[] } {
+  const uniqueIds = [...new Set(selectedIds)];
+  if (uniqueIds.length < 2) throw new Error("Auto layout requires at least two selected elements");
+  const selected = uniqueIds.map((id) => slide.scene.find((element) => element.id === id));
+  if (selected.some((element) => !element)) throw new Error("Selection contains an unknown scene element");
+  const elements = selected as SceneElement[];
+  if (elements.some((element) => element.type === "frame" && element.childIds.some((id) => uniqueIds.includes(id)))) {
+    throw new Error("Cannot wrap a frame together with its own child");
+  }
+
+  const bounds = selectedBounds(elements);
+  const padding = options.paddingDU ?? 24;
+  const frameId = options.frameId ?? `frame_${randomUUID()}`;
+  if (slide.scene.some((element) => element.id === frameId)) throw new Error(`Frame id already exists: ${frameId}`);
+
+  const layout: AutoLayoutSpec = {
+    direction: options.direction ?? "horizontal",
+    gapDU: options.gapDU ?? 24,
+    padding: { top: padding, right: padding, bottom: padding, left: padding },
+    justify: "start",
+    align: "start",
+    widthSizing: "hug",
+    heightSizing: "hug",
+  };
+  const frame: FrameElement = {
+    id: frameId,
+    type: "frame",
+    name: "Auto Layout",
+    semanticRole: "visual",
+    geometry: { x: bounds.x - padding, y: bounds.y - padding, width: bounds.width + padding * 2, height: bounds.height + padding * 2 },
+    zIndex: Math.min(...elements.map((element) => element.zIndex)) - 1,
+    origin: "user",
+    exportStrategy: "native",
+    dependencies: [],
+    childIds: uniqueIds,
+    layout,
+    fill: options.fill,
+    radiusDU: options.radiusDU,
+    clipContent: false,
+  };
+
+  const previewChildren = slide.scene.map((element) => uniqueIds.includes(element.id)
+    ? { ...element, layoutItem: element.layoutItem ?? { width: "fixed", height: "fixed" } as LayoutItemSpec }
+    : element);
+  const previewSlide: SlideDocument = { ...slide, scene: [...previewChildren, frame] };
+  const solved = solveAutoLayout(previewSlide, frameId);
+
+  const operations: DeckMutationOperation[] = [
+    { op: "addElement", slideId: slide.id, element: frame },
+    ...elements.filter((element) => !element.layoutItem).map((element) => ({
+      op: "updateLayoutItem" as const,
+      slideId: slide.id,
+      elementId: element.id,
+      layoutItem: { width: "fixed", height: "fixed" } as LayoutItemSpec,
+    })),
+    { op: "updateGeometry", slideId: slide.id, elementId: frameId, geometry: solved.containerGeometry },
+    ...solved.children.map((child) => ({
+      op: "updateGeometry" as const,
+      slideId: slide.id,
+      elementId: child.elementId,
+      geometry: child.geometry,
+    })),
+  ];
+  return { frameId, operations };
 }
 
 export function findAutoLayoutContainers(deck: DeckDocument): Array<{ slideId: string; elementId: string }> {
