@@ -2,7 +2,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import type { ChartElement, DeckDocument } from "../../deck-model/src/index.js";
 import { dataStoryQuality } from "../../data-storytelling/src/index.js";
-import { compileDeckWithNativeCharts } from "../../pptx-charts/src/index.js";
+import { compileDeckWithVectors } from "../../pptx-vector/src/index.js";
 import type { RichAsset } from "../../pptx-rich/src/index.js";
 import { validatePptxRoundTrip, type RoundTripIssue } from "../../pptx-roundtrip/src/index.js";
 import { runDeterministicQA, type QAIssue } from "../../qa/src/index.js";
@@ -84,24 +84,10 @@ function chartIssues(deck: DeckDocument): ExportPreflightIssue[] {
       if (element.type !== "chart") continue;
       const chart = element as ChartElement;
       for (const issue of dataStoryQuality(chart.chart)) {
-        issues.push({
-          severity: issue.severity,
-          lane: "data",
-          slideId: slide.id,
-          elementId: element.id,
-          code: `chart:${issue.code}`,
-          message: issue.message,
-        });
+        issues.push({ severity: issue.severity, lane: "data", slideId: slide.id, elementId: element.id, code: `chart:${issue.code}`, message: issue.message });
       }
       if (element.exportStrategy === "native" && !NATIVE_CHART_TYPES.has(chart.chart.chartType)) {
-        issues.push({
-          severity: "critical",
-          lane: "export",
-          slideId: slide.id,
-          elementId: element.id,
-          code: "chart:native-type-unsupported",
-          message: `Native PowerPoint export is not implemented for ${chart.chart.chartType} charts`,
-        });
+        issues.push({ severity: "critical", lane: "export", slideId: slide.id, elementId: element.id, code: "chart:native-type-unsupported", message: `Native PowerPoint export is not implemented for ${chart.chart.chartType} charts` });
       }
     }
   }
@@ -112,18 +98,8 @@ export function productionPreflight(deck: DeckDocument): ExportPreflightIssue[] 
   return [...deterministicIssues(runDeterministicQA(deck)), ...chartIssues(deck)];
 }
 
-const STRATEGY_PRIORITY: Record<CompileStrategy, number> = {
-  native: 4,
-  vector: 3,
-  rasterFallback: 2,
-  unsupported: 1,
-};
+const STRATEGY_PRIORITY: Record<CompileStrategy, number> = { native: 4, vector: 3, rasterFallback: 2, unsupported: 1 };
 
-/**
- * Compilers are layered. A lower-level compiler may report an element as unsupported
- * before a later specialized compiler (images/tables/charts/frames) emits it natively.
- * The export manifest must describe the final document, not every intermediate pass.
- */
 export function normalizeCompileResults(deck: DeckDocument, results: CompileElementResult[]): CompileElementResult[] {
   const byId = new Map<string, CompileElementResult[]>();
   for (const result of results) {
@@ -131,24 +107,16 @@ export function normalizeCompileResults(deck: DeckDocument, results: CompileElem
     bucket.push(result);
     byId.set(result.elementId, bucket);
   }
-
   const normalized: CompileElementResult[] = [];
   for (const slide of deck.slides) {
     for (const element of slide.scene) {
       const candidates = byId.get(element.id) ?? [];
       if (!candidates.length) {
-        normalized.push({
-          elementId: element.id,
-          strategy: "unsupported",
-          warnings: [`No compiler layer reported a representation for ${element.type}`],
-        });
+        normalized.push({ elementId: element.id, strategy: "unsupported", warnings: [`No compiler layer reported a representation for ${element.type}`] });
         continue;
       }
-
       let best = candidates[0];
-      for (const candidate of candidates.slice(1)) {
-        if (STRATEGY_PRIORITY[candidate.strategy] > STRATEGY_PRIORITY[best.strategy]) best = candidate;
-      }
+      for (const candidate of candidates.slice(1)) if (STRATEGY_PRIORITY[candidate.strategy] > STRATEGY_PRIORITY[best.strategy]) best = candidate;
       const warnings = [...new Set(candidates.flatMap((candidate) => candidate.warnings))];
       normalized.push({ elementId: element.id, strategy: best.strategy, warnings });
     }
@@ -167,22 +135,16 @@ async function writeManifest(path: string, manifest: ProductionExportManifest): 
   await writeFile(path, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
 }
 
-export async function exportProductionPptx(
-  deck: DeckDocument,
-  outputPath: string,
-  options: ProductionExportOptions = {},
-): Promise<ProductionExportManifest> {
+export async function exportProductionPptx(deck: DeckDocument, outputPath: string, options: ProductionExportOptions = {}): Promise<ProductionExportManifest> {
   const allowDraft = options.allowDraft ?? false;
   const preflightIssues = productionPreflight(deck);
   const blockingPreflight = preflightIssues.filter((issue) => issue.severity === "critical");
   if (blockingPreflight.length && !allowDraft) throw new ProductionExportBlockedError(blockingPreflight);
 
-  const compiled = await compileDeckWithNativeCharts(deck, outputPath, { assets: options.assets ?? {} });
+  const compiled = await compileDeckWithVectors(deck, outputPath, { assets: options.assets ?? {} });
   const finalElementResults = normalizeCompileResults(deck, compiled.elementResults);
   const editability = strategyCounts(finalElementResults);
-  const unsupportedElementIds = finalElementResults
-    .filter((item) => item.strategy === "unsupported")
-    .map((item) => item.elementId);
+  const unsupportedElementIds = finalElementResults.filter((item) => item.strategy === "unsupported").map((item) => item.elementId);
   const roundTrip = await validatePptxRoundTrip(deck, outputPath);
   const blockingRoundTrip = roundTrip.issues.filter((issue) => issue.severity === "critical");
   const ready = blockingPreflight.length === 0 && blockingRoundTrip.length === 0 && unsupportedElementIds.length === 0;
@@ -208,21 +170,8 @@ export async function exportProductionPptx(
   if (!allowDraft && !ready) {
     const issues: ExportPreflightIssue[] = [
       ...blockingPreflight,
-      ...blockingRoundTrip.map((issue) => ({
-        severity: "critical" as const,
-        lane: "export" as const,
-        slideId: issue.slideId,
-        elementId: issue.elementId,
-        code: `roundtrip:${issue.kind}`,
-        message: issue.message,
-      })),
-      ...unsupportedElementIds.map((elementId) => ({
-        severity: "critical" as const,
-        lane: "export" as const,
-        elementId,
-        code: "export:unsupported",
-        message: `Element ${elementId} did not receive a supported final export representation`,
-      })),
+      ...blockingRoundTrip.map((issue) => ({ severity: "critical" as const, lane: "export" as const, slideId: issue.slideId, elementId: issue.elementId, code: `roundtrip:${issue.kind}`, message: issue.message })),
+      ...unsupportedElementIds.map((elementId) => ({ severity: "critical" as const, lane: "export" as const, elementId, code: "export:unsupported", message: `Element ${elementId} did not receive a supported final export representation` })),
     ];
     throw new ProductionExportBlockedError(issues);
   }
