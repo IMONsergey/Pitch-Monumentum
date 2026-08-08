@@ -129,16 +129,6 @@ export function powerPointStyleFidelityIssues(deck: DeckDocument): ExportPreflig
           message: "Custom SVG path remains vector, but the current PowerPoint appearance pass does not inject Pitch gradient/shadow properties after SVG conversion.",
         });
       }
-      if (element.type === "frame" && (element.fillPaint || element.effects?.length) && !element.fill && !element.stroke) {
-        issues.push({
-          severity: "major",
-          lane: "export",
-          slideId: slide.id,
-          elementId: element.id,
-          code: "pptx:appearance-only-frame-not-emitted",
-          message: "This frame only has new Appearance properties and is structural in the current PowerPoint rich pass, so its visual frame itself is not emitted yet.",
-        });
-      }
       if ((element.effects ?? []).filter((effect) => effect.kind === "dropShadow").length > 1) {
         issues.push({
           severity: "minor",
