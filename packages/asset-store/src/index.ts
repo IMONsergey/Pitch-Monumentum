@@ -26,6 +26,7 @@ export interface ImportImageAssetInput {
   filename: string;
   mimeType: string;
   dataBase64: string;
+  /** Client dimensions are accepted for protocol compatibility but canonical dimensions are decoded from image bytes. */
   width?: number;
   height?: number;
   source?: PitchAssetSource;
@@ -46,10 +47,71 @@ function safeName(value: string, extension: string): string {
   return `${base.replace(/\.[^.]+$/, "")}.${extension}`;
 }
 
-function positiveDimension(value: number | undefined): number | undefined {
-  if (value === undefined) return undefined;
-  if (!Number.isFinite(value) || value <= 0) throw new Error("Asset dimensions must be positive finite numbers");
-  return Math.round(value);
+function decodeBase64(value: string): Buffer {
+  const normalized = value.replace(/\s+/g, "");
+  if (!normalized) throw new Error("Image asset is empty");
+  if (normalized.length % 4 === 1 || !/^[A-Za-z0-9+/]*={0,2}$/.test(normalized)) throw new Error("Image asset contains invalid base64 data");
+  const data = Buffer.from(normalized, "base64");
+  if (!data.length) throw new Error("Image asset is empty");
+  return data;
+}
+
+function decodePngDimensions(data: Buffer): { width: number; height: number } | undefined {
+  const signature = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  if (data.length < 24 || !data.subarray(0, 8).equals(signature) || data.subarray(12, 16).toString("ascii") !== "IHDR") return undefined;
+  const width = data.readUInt32BE(16);
+  const height = data.readUInt32BE(20);
+  if (!width || !height) throw new Error("PNG has invalid dimensions");
+  return { width, height };
+}
+
+const JPEG_SOF_MARKERS = new Set([0xc0, 0xc1, 0xc2, 0xc3, 0xc5, 0xc6, 0xc7, 0xc9, 0xca, 0xcb, 0xcd, 0xce, 0xcf]);
+function decodeJpegDimensions(data: Buffer): { width: number; height: number } | undefined {
+  if (data.length < 4 || data[0] !== 0xff || data[1] !== 0xd8) return undefined;
+  let offset = 2;
+  while (offset + 3 < data.length) {
+    if (data[offset] !== 0xff) { offset += 1; continue; }
+    while (offset < data.length && data[offset] === 0xff) offset += 1;
+    if (offset >= data.length) break;
+    const marker = data[offset++];
+    if (marker === 0xd9 || marker === 0xda) break;
+    if (marker === 0x01 || (marker >= 0xd0 && marker <= 0xd8)) continue;
+    if (offset + 1 >= data.length) break;
+    const length = data.readUInt16BE(offset);
+    if (length < 2 || offset + length > data.length) throw new Error("JPEG has an invalid segment length");
+    if (JPEG_SOF_MARKERS.has(marker)) {
+      if (length < 7) throw new Error("JPEG SOF segment is invalid");
+      const height = data.readUInt16BE(offset + 3);
+      const width = data.readUInt16BE(offset + 5);
+      if (!width || !height) throw new Error("JPEG has invalid dimensions");
+      return { width, height };
+    }
+    offset += length;
+  }
+  throw new Error("JPEG dimensions could not be decoded");
+}
+
+function validateImageBytes(data: Buffer, claimedMime: PitchAssetMime): { mimeType: PitchAssetMime; width: number; height: number } {
+  const png = decodePngDimensions(data);
+  if (png) {
+    if (claimedMime !== "image/png") throw new Error(`Image bytes are PNG but mimeType is ${claimedMime}`);
+    return { mimeType: "image/png", ...png };
+  }
+  const jpeg = decodeJpegDimensions(data);
+  if (jpeg) {
+    if (claimedMime !== "image/jpeg") throw new Error(`Image bytes are JPEG but mimeType is ${claimedMime}`);
+    return { mimeType: "image/jpeg", ...jpeg };
+  }
+  throw new Error("Image bytes are not a valid PNG or JPEG");
+}
+
+function sceneAssetReferences(deck: DeckDocument, assetId: string): string[] {
+  const references: string[] = [];
+  for (const slide of deck.slides) for (const element of slide.scene) {
+    if ((element.type === "image" || element.type === "icon" || element.type === "video") && element.assetId === assetId) references.push(`${slide.id}:${element.id}`);
+    if (element.type === "video" && element.posterAssetId === assetId) references.push(`${slide.id}:${element.id}:poster`);
+  }
+  return references;
 }
 
 export class ProjectAssetStore {
@@ -62,11 +124,11 @@ export class ProjectAssetStore {
 
   async importImage(input: ImportImageAssetInput): Promise<PitchAssetMetadata> {
     if (!supportedMime(input.mimeType)) throw new Error(`Unsupported image type: ${input.mimeType}. Pitch Desktop Preview currently accepts PNG and JPEG.`);
-    const data = Buffer.from(input.dataBase64, "base64");
-    if (!data.length) throw new Error("Image asset is empty");
+    const data = decodeBase64(input.dataBase64);
     if (data.length > 40 * 1024 * 1024) throw new Error("Image asset exceeds the 40 MB preview limit");
+    const decoded = validateImageBytes(data, input.mimeType);
     const sha256 = createHash("sha256").update(data).digest("hex");
-    const extension = extensionFor(input.mimeType);
+    const extension = extensionFor(decoded.mimeType);
     const id = `asset_${sha256.slice(0, 20)}`;
     const dir = this.assetDir(id);
     const existing = await this.read(id).catch(() => undefined);
@@ -78,12 +140,12 @@ export class ProjectAssetStore {
       id,
       kind: "image",
       filename,
-      mimeType: input.mimeType,
+      mimeType: decoded.mimeType,
       extension,
       bytes: data.length,
       sha256,
-      width: positiveDimension(input.width),
-      height: positiveDimension(input.height),
+      width: decoded.width,
+      height: decoded.height,
       source: input.source ?? "upload",
       createdAt: new Date().toISOString(),
     };
@@ -117,10 +179,8 @@ export class ProjectAssetStore {
 
   async remove(id: string, deck?: DeckDocument): Promise<void> {
     if (deck) {
-      const references = deck.slides.flatMap(slide => slide.scene.filter(element =>
-        (element.type === "image" || element.type === "icon" || element.type === "video") && element.assetId === id,
-      ).map(element => `${slide.id}:${element.id}`));
-      if (references.length) throw new Error(`Asset ${id} is still used by ${references.length} scene object(s)`);
+      const references = sceneAssetReferences(deck, id);
+      if (references.length) throw new Error(`Asset ${id} is still used by ${references.length} scene object reference(s)`);
     }
     await rm(this.assetDir(id), { recursive: true, force: true });
   }
@@ -135,7 +195,9 @@ export class ProjectAssetStore {
       try {
         const { metadata, path } = await this.content(id);
         result[id] = { path, mimeType: metadata.mimeType };
-      } catch {}
+      } catch (error) {
+        throw new Error(`Deck references missing or unreadable image asset ${id}: ${error instanceof Error ? error.message : String(error)}`);
+      }
     }
     return result;
   }
