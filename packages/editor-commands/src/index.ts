@@ -256,16 +256,12 @@ export function duplicateSelection(slide: SlideDocument, selectedIds: string[], 
   const zShift = maxSceneZ + 1 - minSelectedZ;
   const operations: DeckMutationOperation[] = [];
 
-  // Children must exist before a duplicated container is added, otherwise hierarchy validation
-  // would correctly reject the container's temporary dangling childIds.
   for (const id of postOrder(slide, roots)) {
     const element = index.get(id);
     if (!element || !idMap.has(id)) continue;
     operations.push({ op: "addElement", slideId: slide.id, element: remapElement(element, idMap, offsetDU, offsetDU, zShift) });
   }
 
-  // If a root was duplicated inside an unselected container, keep the copy in that same container,
-  // immediately after its source sibling.
   const parents = parentMap(slide);
   const duplicatedRootSet = new Set(roots);
   const parentUpdates = new Map<string, string[]>();
@@ -308,8 +304,28 @@ export function groupSelection(slide: SlideDocument, selectedIds: string[], grou
   const roots = selectionRoots(slide, selectedIds);
   if (roots.length < 2) throw new Error("Grouping requires at least two top-level selected elements");
   if (slide.scene.some((element) => element.id === groupId)) throw new Error(`Group id already exists: ${groupId}`);
+
   const index = byId(slide);
-  const elements = roots.map((id) => index.get(id)!).filter(Boolean);
+  const parents = parentMap(slide);
+  const parentKeys = new Set(roots.map((id) => parents.get(id) ?? "__root__"));
+  if (parentKeys.size !== 1) throw new Error("Grouping requires selected elements to share the same parent");
+  const parentId = parents.get(roots[0]);
+  const selected = new Set(roots);
+
+  let orderedRoots: string[];
+  if (parentId) {
+    const parent = index.get(parentId);
+    if (!parent || !isContainer(parent)) throw new Error(`Unknown group parent ${parentId}`);
+    orderedRoots = parent.childIds.filter((id) => selected.has(id));
+  } else {
+    orderedRoots = roots
+      .map((id) => index.get(id)!)
+      .filter(Boolean)
+      .sort((a, b) => a.zIndex - b.zIndex || a.id.localeCompare(b.id))
+      .map((element) => element.id);
+  }
+
+  const elements = orderedRoots.map((id) => index.get(id)!).filter(Boolean);
   const bounds = geometryBounds(elements);
   const group: GroupElement = {
     id: groupId,
@@ -321,25 +337,64 @@ export function groupSelection(slide: SlideDocument, selectedIds: string[], grou
     origin: "user",
     exportStrategy: "native",
     dependencies: [],
-    childIds: roots,
+    childIds: orderedRoots,
   };
-  return {
-    operations: [{ op: "addElement", slideId: slide.id, element: group }],
-    nextSelectionIds: [groupId],
-    affectedAutoLayoutContainerIds: [],
-  };
+
+  const operations: DeckMutationOperation[] = [{ op: "addElement", slideId: slide.id, element: group }];
+  const affectedAutoLayoutContainerIds: string[] = [];
+  if (parentId) {
+    const parent = index.get(parentId)!;
+    if (!isContainer(parent)) throw new Error(`Element ${parentId} is not a container`);
+    const nextChildren: string[] = [];
+    let inserted = false;
+    for (const childId of parent.childIds) {
+      if (selected.has(childId)) {
+        if (!inserted) {
+          nextChildren.push(groupId);
+          inserted = true;
+        }
+      } else {
+        nextChildren.push(childId);
+      }
+    }
+    operations.push({ op: "updateContainerChildren", slideId: slide.id, elementId: parentId, childIds: nextChildren });
+    if (parent.layout) affectedAutoLayoutContainerIds.push(parentId);
+  }
+
+  return { operations, nextSelectionIds: [groupId], affectedAutoLayoutContainerIds };
 }
 
 export function ungroupSelection(slide: SlideDocument, selectedIds: string[]): EditorCommandResult {
   const index = byId(slide);
+  const parents = parentMap(slide);
   const groups = selectionRoots(slide, selectedIds)
     .map((id) => index.get(id))
     .filter((element): element is GroupElement => Boolean(element && element.type === "group"));
-  const nextSelectionIds = groups.flatMap((group) => group.childIds);
+
+  const operations: DeckMutationOperation[] = [];
+  const parentUpdates = new Map<string, string[]>();
+  const affectedAutoLayoutContainerIds = new Set<string>();
+  for (const group of groups) {
+    const parentId = parents.get(group.id);
+    if (parentId) {
+      const parent = index.get(parentId);
+      if (!parent || !isContainer(parent)) throw new Error(`Unknown group parent ${parentId}`);
+      const current = parentUpdates.get(parentId) ?? [...parent.childIds];
+      const groupIndex = current.indexOf(group.id);
+      if (groupIndex >= 0) current.splice(groupIndex, 1, ...group.childIds);
+      parentUpdates.set(parentId, current);
+      if (parent.layout) affectedAutoLayoutContainerIds.add(parentId);
+    }
+  }
+  for (const [parentId, childIds] of parentUpdates) {
+    operations.push({ op: "updateContainerChildren", slideId: slide.id, elementId: parentId, childIds });
+  }
+  for (const group of groups) operations.push({ op: "removeElement", slideId: slide.id, elementId: group.id });
+
   return {
-    operations: groups.map((group) => ({ op: "removeElement", slideId: slide.id, elementId: group.id })),
-    nextSelectionIds,
-    affectedAutoLayoutContainerIds: [],
+    operations,
+    nextSelectionIds: groups.flatMap((group) => group.childIds),
+    affectedAutoLayoutContainerIds: [...affectedAutoLayoutContainerIds],
   };
 }
 
@@ -348,12 +403,12 @@ export function arrangeSelection(slide: SlideDocument, selectedIds: string[], co
   if (!roots.length) return { operations: [], nextSelectionIds: [], affectedAutoLayoutContainerIds: [] };
   const selectedClosure = new Set(selectionClosure(slide, roots));
   const ordered = [...slide.scene].sort((a, b) => a.zIndex - b.zIndex || a.id.localeCompare(b.id));
-  const selected = ordered.filter((element) => selectedClosure.has(element.id));
+  const selectedElements = ordered.filter((element) => selectedClosure.has(element.id));
   const unselected = ordered.filter((element) => !selectedClosure.has(element.id));
   let nextOrder: SceneElement[];
 
-  if (command === "bringToFront") nextOrder = [...unselected, ...selected];
-  else if (command === "sendToBack") nextOrder = [...selected, ...unselected];
+  if (command === "bringToFront") nextOrder = [...unselected, ...selectedElements];
+  else if (command === "sendToBack") nextOrder = [...selectedElements, ...unselected];
   else {
     nextOrder = [...ordered];
     if (command === "bringForward") {
