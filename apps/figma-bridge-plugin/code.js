@@ -2,6 +2,7 @@ figma.showUI(__html__, { width: 480, height: 620, themeColors: true });
 
 function post(type, payload = {}) { figma.ui.postMessage({ type, ...payload }); }
 function clamp(value, min = 0, max = 1) { return Math.max(min, Math.min(max, Number.isFinite(value) ? value : min)); }
+function ptToDU(value, duPerInch) { const number = Number(value); return Number.isFinite(number) ? number * duPerInch / 72 : undefined; }
 function hex(value, fallback = { r: .7, g: .7, b: .7 }) {
   if (typeof value !== 'string' || !/^#[0-9a-f]{6}$/i.test(value)) return fallback;
   const raw = value.slice(1); return { r: parseInt(raw.slice(0,2),16)/255, g: parseInt(raw.slice(2,4),16)/255, b: parseInt(raw.slice(4,6),16)/255 };
@@ -12,6 +13,11 @@ function textColor(payload) { return firstRange(payload)?.color || '#111111'; }
 function textSize(payload) { return Number(firstRange(payload)?.fontSizePt || 18); }
 function textFont(payload) { return String(firstRange(payload)?.fontFamily || 'Inter'); }
 function fontStyle(range) { return range?.bold && range?.italic ? 'Bold Italic' : range?.bold ? 'Bold' : range?.italic ? 'Italic' : 'Regular'; }
+function listType(bullet) {
+  if (!bullet) return 'NONE';
+  const marker = String(bullet.marker || '').trim();
+  return /^(?:\d+|[A-Za-z])[.)]?$/.test(marker) ? 'ORDERED' : 'UNORDERED';
+}
 async function loadFont(family, style = 'Regular') {
   const attempts = [
     { family: String(family || 'Inter'), style: String(style || 'Regular') },
@@ -49,9 +55,7 @@ function applyCommon(node, spec, parentOrigin) {
     if (spec.placeholderId) node.setPluginData('pitchPlaceholderId', spec.placeholderId);
   } catch {}
 }
-function strokePaint(stroke) {
-  return stroke?.color ? [solid(stroke.color)] : [];
-}
+function strokePaint(stroke) { return stroke?.color ? [solid(stroke.color)] : []; }
 function applyStroke(node, stroke) {
   if (!stroke || !('strokes' in node)) return;
   node.strokes = strokePaint(stroke);
@@ -72,7 +76,7 @@ function fillPaint(payload, fallback) {
   if (paint?.kind === 'none') return [];
   return fallback ? [solid(fallback)] : [];
 }
-async function applyTextRanges(node, payload) {
+async function applyTextRanges(node, payload, duPerInch) {
   const characters = String(payload?.characters || '');
   const ranges = Array.isArray(payload?.ranges) ? payload.ranges : [];
   for (const range of ranges) {
@@ -81,16 +85,33 @@ async function applyTextRanges(node, payload) {
     if (end <= start) continue;
     const font = await loadFont(range?.fontFamily || textFont(payload), fontStyle(range));
     node.setRangeFontName(start, end, font);
-    if (Number.isFinite(range?.fontSizePt) && Number(range.fontSizePt) > 0) node.setRangeFontSize(start, end, Number(range.fontSizePt));
+    const fontSize = ptToDU(range?.fontSizePt, duPerInch);
+    if (fontSize !== undefined && fontSize > 0) node.setRangeFontSize(start, end, fontSize);
     if (typeof range?.color === 'string') node.setRangeFills(start, end, [solid(range.color)]);
     node.setRangeTextDecoration(start, end, range?.underline ? 'UNDERLINE' : 'NONE');
-    if (Number.isFinite(range?.letterSpacingPt) && typeof node.setRangeLetterSpacing === 'function') node.setRangeLetterSpacing(start, end, { unit: 'PIXELS', value: Number(range.letterSpacingPt) });
+    const letterSpacing = ptToDU(range?.letterSpacingPt, duPerInch);
+    if (letterSpacing !== undefined && typeof node.setRangeLetterSpacing === 'function') node.setRangeLetterSpacing(start, end, { unit: 'PIXELS', value: letterSpacing });
   }
 }
-async function createText(spec, parent, origin) {
+function applyParagraphRanges(node, payload, duPerInch) {
+  const characters = String(payload?.characters || '');
+  const paragraphs = Array.isArray(payload?.paragraphs) ? payload.paragraphs : [];
+  for (const paragraph of paragraphs) {
+    const start = Math.max(0, Math.min(characters.length, Number(paragraph?.start || 0)));
+    const end = Math.max(start, Math.min(characters.length, Number(paragraph?.end || 0)));
+    if (end <= start) continue;
+    const lineSpacing = Number(paragraph?.lineSpacing);
+    if (Number.isFinite(lineSpacing) && lineSpacing > 0 && typeof node.setRangeLineHeight === 'function') node.setRangeLineHeight(start, end, { unit: 'PERCENT', value: lineSpacing * 100 });
+    const paragraphSpacing = ptToDU(paragraph?.spaceAfterPt, duPerInch);
+    if (paragraphSpacing !== undefined && paragraphSpacing >= 0 && typeof node.setRangeParagraphSpacing === 'function') node.setRangeParagraphSpacing(start, end, paragraphSpacing);
+    if (paragraph?.bullet && typeof node.setRangeListOptions === 'function') node.setRangeListOptions(start, end, { type: listType(paragraph.bullet) });
+  }
+}
+async function createText(spec, parent, origin, duPerInch) {
   const node = figma.createText(); parent.appendChild(node); applyCommon(node, spec, origin);
-  const payload = spec.payload || {}; const font = await loadFont(textFont(payload), fontStyle(firstRange(payload))); node.fontName = font; node.autoRename = false; node.characters = String(payload.characters || ''); node.fontSize = textSize(payload); node.fills = [solid(textColor(payload))];
-  await applyTextRanges(node, payload);
+  const payload = spec.payload || {}; const font = await loadFont(textFont(payload), fontStyle(firstRange(payload))); node.fontName = font; node.autoRename = false; node.characters = String(payload.characters || ''); node.fontSize = Math.max(1, ptToDU(textSize(payload), duPerInch) || 1); node.fills = [solid(textColor(payload))];
+  await applyTextRanges(node, payload, duPerInch);
+  applyParagraphRanges(node, payload, duPerInch);
   try { node.resize(Math.max(1, spec.width), Math.max(1, spec.height)); } catch {}
   node.textAutoResize = 'NONE';
   if (payload.verticalAlign === 'middle') node.textAlignVertical = 'CENTER'; else if (payload.verticalAlign === 'bottom') node.textAlignVertical = 'BOTTOM'; else node.textAlignVertical = 'TOP';
@@ -104,7 +125,7 @@ function createShape(spec, parent, origin) {
   else if (payload.shape === 'triangle') { node = figma.createPolygon(); node.pointCount = 3; }
   else if (payload.shape === 'custom' && (payload.svgPath || payload.pathData)) {
     node = figma.createVector();
-    if (payload.svgPath) { try { node.vectorPaths = [{ windingRule: 'NONZERO', data: payload.svgPath }]; } catch {} }
+    if (payload.svgPath) { try { node.vectorPaths = [{ windingRule: String(payload.pathData?.fillRule || '').toUpperCase() === 'EVENODD' ? 'EVENODD' : 'NONZERO', data: payload.svgPath }]; } catch {} }
   } else node = figma.createRectangle();
   parent.appendChild(node); applyCommon(node, spec, origin); node.resize(Math.max(1, spec.width), Math.max(1, spec.height));
   if ('fills' in node) node.fills = fillPaint(payload, payload.fill);
@@ -125,28 +146,29 @@ async function createImage(spec, parent, origin, assets) {
 function createContainer(spec, parent, origin, transparent = false) {
   const node=figma.createFrame(); parent.appendChild(node); applyCommon(node,spec,origin); node.resize(Math.max(1,spec.width),Math.max(1,spec.height)); node.layoutMode='NONE'; const payload=spec.payload||{}; node.fills=transparent?[]:fillPaint(payload,payload.fill); node.clipsContent=Boolean(payload.clipContent); if (payload.radiusDU) node.cornerRadius=Math.max(0,payload.radiusDU); applyStroke(node,payload.stroke); applyEffects(node,payload.effects); return node;
 }
-async function createFallback(spec,parent,origin) {
-  const frame=createContainer(spec,parent,origin,true); frame.name=`${spec.name} · ${spec.type}`; const label=figma.createText(); frame.appendChild(label); const font=await loadFont('Inter'); label.fontName=font; label.autoRename=false; label.characters=`${String(spec.type).toUpperCase()} · editable structured payload stored in plugin data`; label.fontSize=12; label.fills=[solid('#69727D')]; label.x=8; label.y=8; try{label.resize(Math.max(40,spec.width-16),28);}catch{} return frame;
+async function createFallback(spec,parent,origin,duPerInch) {
+  const frame=createContainer(spec,parent,origin,true); frame.name=`${spec.name} · ${spec.type}`; const label=figma.createText(); frame.appendChild(label); const font=await loadFont('Inter'); label.fontName=font; label.autoRename=false; label.characters=`${String(spec.type).toUpperCase()} · editable structured payload stored in plugin data`; label.fontSize=Math.max(1,ptToDU(12,duPerInch)||12); label.fills=[solid('#69727D')]; label.x=8; label.y=8; try{label.resize(Math.max(40,spec.width-16),28);}catch{} return frame;
 }
-async function createNode(spec,parent,origin,assets) {
-  if (spec.type==='text') return createText(spec,parent,origin);
+async function createNode(spec,parent,origin,assets,duPerInch) {
+  if (spec.type==='text') return createText(spec,parent,origin,duPerInch);
   if (spec.type==='shape') return createShape(spec,parent,origin);
   if (spec.type==='line') return createLine(spec,parent,origin);
   if (spec.type==='image'||spec.type==='icon') return createImage(spec,parent,origin,assets);
   if (spec.type==='frame') return createContainer(spec,parent,origin,false);
   if (spec.type==='group') return createContainer(spec,parent,origin,true);
-  return createFallback(spec,parent,origin);
+  return createFallback(spec,parent,origin,duPerInch);
 }
-async function renderSlide(slide,index,assets) {
+async function renderSlide(slide,index,assets,duPerInch) {
   const page=figma.currentPage; const slideFrame=figma.createFrame(); page.appendChild(slideFrame); slideFrame.name=`${String(index+1).padStart(2,'0')} · ${slide.title}`; slideFrame.resize(slide.width,slide.height); slideFrame.x=index*(slide.width+160); slideFrame.y=0; slideFrame.fills=[solid('#FFFFFF')]; slideFrame.clipsContent=true; slideFrame.setPluginData('pitchSlideId',slide.slideId);
   const byId=new Map(slide.nodes.map(n=>[n.pitchId,n])); const parentOf=new Map(); for(const spec of slide.nodes) if(Array.isArray(spec.childIds)) for(const child of spec.childIds) parentOf.set(child,spec.pitchId); for(const spec of slide.nodes) if(spec.groupId&&!parentOf.has(spec.pitchId))parentOf.set(spec.pitchId,spec.groupId);
-  async function render(spec,parent,origin){const node=await createNode(spec,parent,origin,assets);const children=Array.isArray(spec.childIds)?spec.childIds:[];for(const childId of children){const child=byId.get(childId);if(child)await render(child,node,{x:spec.x,y:spec.y});}return node;}
+  async function render(spec,parent,origin){const node=await createNode(spec,parent,origin,assets,duPerInch);const children=Array.isArray(spec.childIds)?spec.childIds:[];for(const childId of children){const child=byId.get(childId);if(child)await render(child,node,{x:spec.x,y:spec.y});}return node;}
   const roots=[...slide.nodes].filter(spec=>!parentOf.has(spec.pitchId)).sort((a,b)=>a.zIndex-b.zIndex); for(const spec of roots) await render(spec,slideFrame,{x:0,y:0}); return slideFrame;
 }
 async function importBridge(document) {
   if (!document || document.kind!=='pitch-figma-bridge' || document.schemaVersion!=='0.1') throw new Error('Not a Pitch Monumentum Figma bridge document');
-  const created=[]; for (let i=0;i<document.slides.length;i+=1){post('progress',{message:`Importing slide ${i+1}/${document.slides.length}`});created.push(await renderSlide(document.slides[i],i,document.assets||{}));}
-  figma.currentPage.setPluginData('pitchDeckId',String(document.deckId)); figma.currentPage.setPluginData('pitchBridgeTheme',JSON.stringify(document.theme||null)); figma.currentPage.setPluginData('pitchSlideMasters',JSON.stringify(document.slideMasters||null)); figma.currentPage.selection=created; if(created.length)figma.viewport.scrollAndZoomIntoView(created); return created.length;
+  const duPerInch=Number(document.canvas?.duPerInch||144); if(!Number.isFinite(duPerInch)||duPerInch<=0)throw new Error('Pitch bridge canvas.duPerInch must be a positive number');
+  const created=[]; for (let i=0;i<document.slides.length;i+=1){post('progress',{message:`Importing slide ${i+1}/${document.slides.length}`});created.push(await renderSlide(document.slides[i],i,document.assets||{},duPerInch));}
+  figma.currentPage.setPluginData('pitchDeckId',String(document.deckId)); figma.currentPage.setPluginData('pitchBridgeTheme',JSON.stringify(document.theme||null)); figma.currentPage.setPluginData('pitchSlideMasters',JSON.stringify(document.slideMasters||null)); figma.currentPage.setPluginData('pitchDuPerInch',String(duPerInch)); figma.currentPage.selection=created; if(created.length)figma.viewport.scrollAndZoomIntoView(created); return created.length;
 }
 figma.ui.onmessage = async (message) => {
   if (message?.type==='close') { figma.closePlugin(); return; }
