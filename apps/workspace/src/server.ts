@@ -2,10 +2,11 @@ import { createServer } from "node:http";
 import { mkdir, readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { ArtifactStore, type ProjectManifest, type BranchArtifactHead } from "../../../packages/artifact-store/src/index.js";
-import type { DeckDocument } from "../../../packages/deck-model/src/index.js";
+import type { AutoLayoutSpec, DeckDocument } from "../../../packages/deck-model/src/index.js";
 import { applyDeckMutation, createMutation, deckHash, type DeckMutationOperation } from "../../../packages/mutations/src/index.js";
+import { setAutoLayoutMutationOperations, wrapSelectionInAutoLayoutOperations } from "../../../packages/auto-layout/src/index.js";
 import { runDeterministicQA } from "../../../packages/qa/src/index.js";
-import { compileDeckToPptx } from "../../../packages/pptx/src/index.js";
+import { exportProductionPptx } from "../../../packages/export-pipeline/src/index.js";
 import { VersionJournal } from "../../../packages/version-history/src/index.js";
 import { editorSpikeHtml, workspaceHtml } from "./ui.js";
 
@@ -63,6 +64,40 @@ export class PitchWorkspaceService {
     return this.state();
   }
 
+  async setAutoLayout(input: { slideId: string; elementId: string; layout: AutoLayoutSpec; expectedDeckHash?: string }) {
+    const current = await this.state();
+    if (input.expectedDeckHash && input.expectedDeckHash !== current.deckHash) {
+      throw new Error(`Deck changed since auto-layout edit was authored: expected ${input.expectedDeckHash}, got ${current.deckHash}`);
+    }
+    const slide = current.deck.slides.find((item) => item.id === input.slideId);
+    if (!slide) throw new Error(`Unknown slide: ${input.slideId}`);
+    const operations = setAutoLayoutMutationOperations(slide, input.elementId, input.layout);
+    return this.mutate({ reason: `Set auto layout on ${input.elementId}`, operations, expectedDeckHash: current.deckHash });
+  }
+
+  async wrapSelectionInAutoLayout(input: {
+    slideId: string;
+    selectedIds: string[];
+    direction?: AutoLayoutSpec["direction"];
+    gapDU?: number;
+    paddingDU?: number;
+    expectedDeckHash?: string;
+  }) {
+    const current = await this.state();
+    if (input.expectedDeckHash && input.expectedDeckHash !== current.deckHash) {
+      throw new Error(`Deck changed since auto-layout wrap was authored: expected ${input.expectedDeckHash}, got ${current.deckHash}`);
+    }
+    const slide = current.deck.slides.find((item) => item.id === input.slideId);
+    if (!slide) throw new Error(`Unknown slide: ${input.slideId}`);
+    const built = wrapSelectionInAutoLayoutOperations(slide, input.selectedIds, {
+      direction: input.direction,
+      gapDU: input.gapDU,
+      paddingDU: input.paddingDU,
+    });
+    const next = await this.mutate({ reason: `Wrap selection in auto layout ${built.frameId}`, operations: built.operations, expectedDeckHash: current.deckHash });
+    return { ...next, createdFrameId: built.frameId };
+  }
+
   async fork(name: string) {
     const before = await this.state();
     const parentId = before.manifest.activeBranchId;
@@ -91,8 +126,8 @@ export class PitchWorkspaceService {
     const dir = join(this.root, ".project", "exports");
     await mkdir(dir, { recursive: true });
     const path = join(dir, `${current.deck.id}-v${head.version}.pptx`);
-    const result = await compileDeckToPptx(current.deck, path);
-    return { path, result };
+    const manifest = await exportProductionPptx(current.deck, path, { assets: {} });
+    return { path, manifest };
   }
 }
 
@@ -108,6 +143,18 @@ export function createWorkspaceServer(projectRoot: string) {
       if (req.method === "GET" && url.pathname === "/editor-spike.js") { res.writeHead(200, { "content-type": "text/javascript; charset=utf-8", "cache-control": "no-store" }); res.end(await staticAsset("editor-spike.js")); return; }
       if (req.method === "GET" && url.pathname === "/api/project") { json(res, 200, await service.state()); return; }
       if (req.method === "POST" && url.pathname === "/api/mutate") { json(res, 200, await service.mutate(await body(req))); return; }
+      if (req.method === "POST" && url.pathname === "/api/auto-layout") {
+        const data = await body(req);
+        if (!data.slideId || !data.elementId || !data.layout) throw new Error("slideId, elementId and layout are required");
+        json(res, 200, await service.setAutoLayout(data));
+        return;
+      }
+      if (req.method === "POST" && url.pathname === "/api/wrap-auto-layout") {
+        const data = await body(req);
+        if (!data.slideId || !Array.isArray(data.selectedIds)) throw new Error("slideId and selectedIds are required");
+        json(res, 200, await service.wrapSelectionInAutoLayout(data));
+        return;
+      }
       if (req.method === "POST" && url.pathname === "/api/branch") { const data = await body(req); if (!data.name) throw new Error("Branch name required"); json(res, 200, await service.fork(data.name)); return; }
       if (req.method === "POST" && url.pathname === "/api/checkout") { const data = await body(req); if (!data.branchId) throw new Error("branchId required"); json(res, 200, await service.checkout(data.branchId)); return; }
       if (req.method === "POST" && url.pathname === "/api/undo") { json(res, 200, await service.undo()); return; }

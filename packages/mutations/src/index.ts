@@ -1,7 +1,9 @@
 import { createHash, randomUUID } from "node:crypto";
 import type {
+  AutoLayoutSpec,
   DeckDocument,
   Geometry,
+  LayoutItemSpec,
   SceneElement,
   SlideDocument,
   SlideSemanticContract,
@@ -35,6 +37,18 @@ export type DeckMutationOperation =
         locked?: boolean;
         name?: string;
       };
+    }
+  | {
+      op: "updateAutoLayout";
+      slideId: string;
+      elementId: string;
+      layout: AutoLayoutSpec | null;
+    }
+  | {
+      op: "updateLayoutItem";
+      slideId: string;
+      elementId: string;
+      layoutItem: LayoutItemSpec | null;
     }
   | {
       op: "addElement";
@@ -174,6 +188,18 @@ function applyOperation(deck: DeckDocument, operation: DeckMutationOperation): D
         ...element,
         ...operation.changes,
       }));
+    case "updateAutoLayout":
+      return mutateElement(deck, operation.slideId, operation.elementId, (element) => {
+        if (element.type !== "frame" && element.type !== "group") {
+          throw new Error(`Element ${operation.elementId} cannot own auto layout`);
+        }
+        return { ...element, layout: operation.layout ?? undefined };
+      });
+    case "updateLayoutItem":
+      return mutateElement(deck, operation.slideId, operation.elementId, (element) => ({
+        ...element,
+        layoutItem: operation.layoutItem ?? undefined,
+      }));
     case "addElement": {
       ensureUniqueElementId(deck, operation.element);
       const slide = findSlide(deck, operation.slideId);
@@ -239,7 +265,13 @@ function impactForOperation(deck: DeckDocument, operation: DeckMutationOperation
       evidenceRisk = true;
     }
   }
-  if (operation.op === "updateGeometry" || operation.op === "addElement" || operation.op === "removeElement") {
+  if (
+    operation.op === "updateGeometry"
+    || operation.op === "updateAutoLayout"
+    || operation.op === "updateLayoutItem"
+    || operation.op === "addElement"
+    || operation.op === "removeElement"
+  ) {
     stale.add("qa:readability");
   }
   if (operation.op === "updateSlideSemantic") {
@@ -282,9 +314,14 @@ export function applyDeckMutation(deck: DeckDocument, mutation: DeckMutation): A
   if (mutation.expectedDeckHash && mutation.expectedDeckHash !== beforeHash) {
     throw new Error(`Deck changed since mutation was authored: expected ${mutation.expectedDeckHash}, got ${beforeHash}`);
   }
-  const impacts = mutation.operations.map((operation) => impactForOperation(deck, operation));
+
+  const impacts: MutationImpact[] = [];
   let next = deck;
-  for (const operation of mutation.operations) next = applyOperation(next, operation);
+  for (const operation of mutation.operations) {
+    impacts.push(impactForOperation(next, operation));
+    next = applyOperation(next, operation);
+  }
+
   const afterHash = deckHash(next);
   return {
     mutationId: mutation.id,
