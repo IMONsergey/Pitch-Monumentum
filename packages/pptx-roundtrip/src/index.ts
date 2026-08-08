@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { inflateRawSync } from "node:zlib";
-import type { DeckDocument, SceneElement, TextRun } from "../../deck-model/src/index.js";
+import type { DeckDocument, LineElement, SceneElement, ShapeElement, TextRun } from "../../deck-model/src/index.js";
 
 interface ZipEntry {
   name: string;
@@ -9,6 +9,8 @@ interface ZipEntry {
   uncompressedSize: number;
   localOffset: number;
 }
+
+const EMU_PER_DU = 914400 / 144;
 
 export interface PptxTextRunInspection {
   text: string;
@@ -21,11 +23,29 @@ export interface PptxTextRunInspection {
   color?: string;
 }
 
+export interface PptxShapeStyleInspection {
+  preset: string;
+  fill?: string;
+  strokeColor?: string;
+  strokeWidthDU?: number;
+  dash: "solid" | "dash" | "dot";
+}
+
+export interface PptxLineStyleInspection {
+  strokeColor?: string;
+  strokeWidthDU?: number;
+  dash: "solid" | "dash" | "dot";
+  startMarker: "none" | "arrow" | "dot";
+  endMarker: "none" | "arrow" | "dot";
+}
+
 export interface PptxSlideInspection {
   index: number;
   path: string;
   text: string[];
   textRuns: PptxTextRunInspection[];
+  shapeStyles: PptxShapeStyleInspection[];
+  lineStyles: PptxLineStyleInspection[];
   shapeCount: number;
   textBodyCount: number;
   pictureCount: number;
@@ -42,7 +62,7 @@ export interface PptxInspection {
 
 export interface RoundTripIssue {
   severity: "minor" | "major" | "critical";
-  kind: "package" | "slideCount" | "textMissing" | "textStyle" | "nativeStructure";
+  kind: "package" | "slideCount" | "textMissing" | "textStyle" | "shapeStyle" | "lineStyle" | "nativeStructure";
   slideId?: string;
   elementId?: string;
   message: string;
@@ -146,6 +166,72 @@ function extractTextRuns(xml: string): PptxTextRunInspection[] {
   return runs;
 }
 
+function normalizedDash(body: string): "solid" | "dash" | "dot" {
+  const value = body.match(/<a:prstDash\s+[^>]*val="([^"]+)"/)?.[1];
+  if (value === "dash") return "dash";
+  if (value === "sysDot" || value === "dot") return "dot";
+  return "solid";
+}
+
+function solidFill(body: string): string | undefined {
+  const value = body.match(/<a:solidFill>[\s\S]*?<a:srgbClr\s+[^>]*val="([0-9A-Fa-f]{6})"[\s\S]*?<\/a:solidFill>/)?.[1];
+  return value ? `#${value.toUpperCase()}` : undefined;
+}
+
+function lineBody(body: string): string | undefined {
+  return body.match(/<a:ln(?:\s[^>]*)?>([\s\S]*?)<\/a:ln>/)?.[0];
+}
+
+function lineWidthDU(body: string): number | undefined {
+  const opening = body.match(/<a:ln\s+([^>]*)>/)?.[1];
+  const width = opening ? attribute(opening, "w") : undefined;
+  return width === undefined ? undefined : Number(width) / EMU_PER_DU;
+}
+
+function extractShapeStyles(xml: string): PptxShapeStyleInspection[] {
+  const shapes: PptxShapeStyleInspection[] = [];
+  for (const match of xml.matchAll(/<p:sp>([\s\S]*?)<\/p:sp>/g)) {
+    const body = match[1];
+    if (/<p:txBody(?:\s|>)/.test(body)) continue;
+    const properties = body.match(/<p:spPr>([\s\S]*?)<\/p:spPr>/)?.[1] ?? "";
+    const preset = properties.match(/<a:prstGeom\s+[^>]*prst="([^"]+)"/)?.[1] ?? "unknown";
+    const line = lineBody(properties);
+    const fillSection = properties.split(/<a:ln(?:\s|>)/)[0];
+    shapes.push({
+      preset,
+      fill: /<a:noFill\s*\/>/.test(fillSection) ? undefined : solidFill(fillSection),
+      strokeColor: line && !/<a:noFill\s*\/>/.test(line) ? solidFill(line) : undefined,
+      strokeWidthDU: line ? lineWidthDU(line) : undefined,
+      dash: line ? normalizedDash(line) : "solid",
+    });
+  }
+  return shapes;
+}
+
+function marker(body: string, tag: "headEnd" | "tailEnd"): "none" | "arrow" | "dot" {
+  const value = body.match(new RegExp(`<a:${tag}\\s+[^>]*type="([^"]+)"`))?.[1];
+  if (value === "triangle") return "arrow";
+  if (value === "oval") return "dot";
+  return "none";
+}
+
+function extractLineStyles(xml: string): PptxLineStyleInspection[] {
+  const lines: PptxLineStyleInspection[] = [];
+  for (const match of xml.matchAll(/<p:cxnSp>([\s\S]*?)<\/p:cxnSp>/g)) {
+    const body = match[1];
+    const properties = body.match(/<p:spPr>([\s\S]*?)<\/p:spPr>/)?.[1] ?? "";
+    const line = lineBody(properties) ?? "";
+    lines.push({
+      strokeColor: solidFill(line),
+      strokeWidthDU: lineWidthDU(line),
+      dash: normalizedDash(line),
+      startMarker: marker(line, "headEnd"),
+      endMarker: marker(line, "tailEnd"),
+    });
+  }
+  return lines;
+}
+
 function slideNumber(name: string): number {
   return Number(name.match(/slide(\d+)\.xml$/)?.[1] ?? Number.MAX_SAFE_INTEGER);
 }
@@ -164,6 +250,8 @@ export async function inspectPptx(path: string): Promise<PptxInspection> {
         path: entry.name,
         text: extractText(xml),
         textRuns: extractTextRuns(xml),
+        shapeStyles: extractShapeStyles(xml),
+        lineStyles: extractLineStyles(xml),
         shapeCount: matches(xml, /<p:sp(?:\s|>)/g),
         textBodyCount: matches(xml, /<p:txBody(?:\s|>)/g),
         pictureCount: matches(xml, /<p:pic(?:\s|>)/g),
@@ -196,6 +284,14 @@ function expectedRuns(deckSlide: DeckDocument["slides"][number]): ExpectedRun[] 
       : []);
 }
 
+function expectedShapes(deckSlide: DeckDocument["slides"][number]): ShapeElement[] {
+  return [...deckSlide.scene].sort((a, b) => a.zIndex - b.zIndex).filter((element): element is ShapeElement => element.type === "shape" && element.exportStrategy === "native");
+}
+
+function expectedLines(deckSlide: DeckDocument["slides"][number]): LineElement[] {
+  return [...deckSlide.scene].sort((a, b) => a.zIndex - b.zIndex).filter((element): element is LineElement => element.type === "line" && element.exportStrategy === "native");
+}
+
 function approximately(a: number | undefined, b: number | undefined, tolerance = 0.011): boolean {
   if (a === undefined && b === undefined) return true;
   if (a === undefined || b === undefined) return false;
@@ -217,6 +313,33 @@ function styleDifferences(expected: TextRun, actual: PptxTextRunInspection): str
   if (expected.letterSpacingPt !== undefined && !approximately(expected.letterSpacingPt, actual.letterSpacingPt)) differences.push(`letterSpacingPt expected=${expected.letterSpacingPt} actual=${actual.letterSpacingPt}`);
   if (expected.fontFamily && expected.fontFamily !== actual.fontFamily) differences.push(`fontFamily expected=${expected.fontFamily} actual=${actual.fontFamily}`);
   if (expected.color && normalizedColor(expected.color) !== normalizedColor(actual.color)) differences.push(`color expected=${normalizedColor(expected.color)} actual=${normalizedColor(actual.color)}`);
+  return differences;
+}
+
+function shapePreset(element: ShapeElement): string {
+  if (element.shape === "roundRect") return "roundRect";
+  if (element.shape === "ellipse") return "ellipse";
+  if (element.shape === "triangle") return "triangle";
+  return "rect";
+}
+
+function shapeStyleDifferences(expected: ShapeElement, actual: PptxShapeStyleInspection): string[] {
+  const differences: string[] = [];
+  if (shapePreset(expected) !== actual.preset) differences.push(`preset expected=${shapePreset(expected)} actual=${actual.preset}`);
+  if (normalizedColor(expected.fill) !== normalizedColor(actual.fill)) differences.push(`fill expected=${normalizedColor(expected.fill)} actual=${normalizedColor(actual.fill)}`);
+  if (normalizedColor(expected.stroke?.color) !== normalizedColor(actual.strokeColor)) differences.push(`strokeColor expected=${normalizedColor(expected.stroke?.color)} actual=${normalizedColor(actual.strokeColor)}`);
+  if (expected.stroke && !approximately(expected.stroke.widthDU, actual.strokeWidthDU, 0.02)) differences.push(`strokeWidthDU expected=${expected.stroke.widthDU} actual=${actual.strokeWidthDU}`);
+  if ((expected.stroke?.dash ?? "solid") !== actual.dash) differences.push(`dash expected=${expected.stroke?.dash ?? "solid"} actual=${actual.dash}`);
+  return differences;
+}
+
+function lineStyleDifferences(expected: LineElement, actual: PptxLineStyleInspection): string[] {
+  const differences: string[] = [];
+  if (normalizedColor(expected.stroke.color) !== normalizedColor(actual.strokeColor)) differences.push(`strokeColor expected=${normalizedColor(expected.stroke.color)} actual=${normalizedColor(actual.strokeColor)}`);
+  if (!approximately(expected.stroke.widthDU, actual.strokeWidthDU, 0.02)) differences.push(`strokeWidthDU expected=${expected.stroke.widthDU} actual=${actual.strokeWidthDU}`);
+  if ((expected.stroke.dash ?? "solid") !== actual.dash) differences.push(`dash expected=${expected.stroke.dash ?? "solid"} actual=${actual.dash}`);
+  if ((expected.startMarker ?? "none") !== actual.startMarker) differences.push(`startMarker expected=${expected.startMarker ?? "none"} actual=${actual.startMarker}`);
+  if ((expected.endMarker ?? "none") !== actual.endMarker) differences.push(`endMarker expected=${expected.endMarker ?? "none"} actual=${actual.endMarker}`);
   return differences;
 }
 
@@ -263,14 +386,26 @@ export async function validatePptxRoundTrip(deck: DeckDocument, path: string): P
       cursor = matchedIndex + 1;
       const differences = styleDifferences(expectedRun.run, actual);
       if (differences.length) {
-        issues.push({
-          severity: "major",
-          kind: "textStyle",
-          slideId: source.id,
-          elementId: expectedRun.elementId,
-          message: `Native text style drift for "${expectedRun.run.text.slice(0, 60)}": ${differences.join("; ")}`,
-        });
+        issues.push({ severity: "major", kind: "textStyle", slideId: source.id, elementId: expectedRun.elementId, message: `Native text style drift for "${expectedRun.run.text.slice(0, 60)}": ${differences.join("; ")}` });
       }
+    }
+
+    const shapes = expectedShapes(source);
+    if (exported.shapeStyles.length < shapes.length) {
+      issues.push({ severity: "major", kind: "nativeStructure", slideId: source.id, message: `Expected ${shapes.length} styled native shape(s), inspected ${exported.shapeStyles.length}` });
+    }
+    for (let shapeIndex = 0; shapeIndex < Math.min(shapes.length, exported.shapeStyles.length); shapeIndex += 1) {
+      const differences = shapeStyleDifferences(shapes[shapeIndex], exported.shapeStyles[shapeIndex]);
+      if (differences.length) issues.push({ severity: "major", kind: "shapeStyle", slideId: source.id, elementId: shapes[shapeIndex].id, message: `Native shape style drift: ${differences.join("; ")}` });
+    }
+
+    const lines = expectedLines(source);
+    if (exported.lineStyles.length < lines.length) {
+      issues.push({ severity: "major", kind: "nativeStructure", slideId: source.id, message: `Expected ${lines.length} native line(s), inspected ${exported.lineStyles.length}` });
+    }
+    for (let lineIndex = 0; lineIndex < Math.min(lines.length, exported.lineStyles.length); lineIndex += 1) {
+      const differences = lineStyleDifferences(lines[lineIndex], exported.lineStyles[lineIndex]);
+      if (differences.length) issues.push({ severity: "major", kind: "lineStyle", slideId: source.id, elementId: lines[lineIndex].id, message: `Native line style drift: ${differences.join("; ")}` });
     }
   }
   return { inspection, issues };
