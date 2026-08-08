@@ -153,12 +153,7 @@ export function solveAutoLayout(slide: SlideDocument, containerId: string): Auto
       },
     }));
 
-    return {
-      containerId,
-      containerGeometry,
-      children: childResults,
-      warnings,
-    };
+    return { containerId, containerGeometry, children: childResults, warnings };
   } finally {
     root.freeRecursive();
   }
@@ -167,22 +162,37 @@ export function solveAutoLayout(slide: SlideDocument, containerId: string): Auto
 export function autoLayoutMutationOperations(slide: SlideDocument, containerId: string): DeckMutationOperation[] {
   const result = solveAutoLayout(slide, containerId);
   const operations: DeckMutationOperation[] = [
-    {
-      op: "updateGeometry",
-      slideId: slide.id,
-      elementId: containerId,
-      geometry: result.containerGeometry,
-    },
+    { op: "updateGeometry", slideId: slide.id, elementId: containerId, geometry: result.containerGeometry },
   ];
   for (const child of result.children) {
-    operations.push({
-      op: "updateGeometry",
-      slideId: slide.id,
-      elementId: child.elementId,
-      geometry: child.geometry,
-    });
+    operations.push({ op: "updateGeometry", slideId: slide.id, elementId: child.elementId, geometry: child.geometry });
   }
   return operations;
+}
+
+export function setAutoLayoutMutationOperations(
+  slide: SlideDocument,
+  containerId: string,
+  layout: AutoLayoutSpec,
+): DeckMutationOperation[] {
+  const validation = validateAutoLayoutSpec(layout);
+  if (validation.length) throw new Error(validation.join("; "));
+  const container = slide.scene.find((element) => element.id === containerId);
+  if (!container || (container.type !== "frame" && container.type !== "group")) throw new Error(`Element ${containerId} is not a frame/group`);
+  const previewSlide: SlideDocument = {
+    ...slide,
+    scene: slide.scene.map((element) => element.id === containerId ? { ...container, layout } : element),
+  };
+  return [
+    { op: "updateAutoLayout", slideId: slide.id, elementId: containerId, layout },
+    ...autoLayoutMutationOperations(previewSlide, containerId),
+  ];
+}
+
+export function removeAutoLayoutMutationOperations(slide: SlideDocument, containerId: string): DeckMutationOperation[] {
+  const container = slide.scene.find((element) => element.id === containerId);
+  if (!container || (container.type !== "frame" && container.type !== "group")) throw new Error(`Element ${containerId} is not a frame/group`);
+  return [{ op: "updateAutoLayout", slideId: slide.id, elementId: containerId, layout: null }];
 }
 
 export function findAutoLayoutContainers(deck: DeckDocument): Array<{ slideId: string; elementId: string }> {
