@@ -4,6 +4,7 @@ import { applyDeckMutation, createMutation, type DeckMutationOperation } from ".
 import {
   alignSelection,
   arrangeSelection,
+  copySelection,
   createFrameElement,
   createShapeElement,
   createTextElement,
@@ -13,6 +14,7 @@ import {
   groupSelection,
   nudgeSelection,
   pasteClipboard,
+  selectionRoots,
   ungroupSelection,
   type AlignCommand,
   type ArrangeCommand,
@@ -30,7 +32,9 @@ export type EditorCommandInput =
   | { command: "group"; slideId: string; selectedIds: string[]; groupId?: string }
   | { command: "ungroup"; slideId: string; selectedIds: string[] }
   | { command: "arrange"; slideId: string; selectedIds: string[]; arrangement: ArrangeCommand }
+  | { command: "copy"; slideId: string; selectedIds: string[] }
   | { command: "paste"; slideId: string; clipboard: PitchClipboardPayload; offsetDU?: number }
+  | { command: "lock"; slideId: string; selectedIds: string[]; locked: boolean }
   | { command: "insertText"; slideId: string; geometry: Geometry; text?: string }
   | { command: "insertShape"; slideId: string; geometry: Geometry; shape?: "rect" | "roundRect" | "ellipse" | "triangle"; fill?: string }
   | { command: "insertFrame"; slideId: string; geometry: Geometry; fill?: string };
@@ -40,6 +44,7 @@ export interface ExecutedEditorCommand {
   operations: DeckMutationOperation[];
   nextSelectionIds: string[];
   reflowedContainerIds: string[];
+  clipboard?: PitchClipboardPayload;
 }
 
 function slideById(deck: DeckDocument, slideId: string): SlideDocument {
@@ -60,7 +65,7 @@ function resultForInsert(element: SceneElement): EditorCommandResult {
   };
 }
 
-function dispatch(slide: SlideDocument, input: EditorCommandInput): EditorCommandResult {
+function dispatch(slide: SlideDocument, input: Exclude<EditorCommandInput, { command: "copy" }>): EditorCommandResult {
   switch (input.command) {
     case "nudge": return nudgeSelection(slide, input.selectedIds, input.dx, input.dy);
     case "align": return alignSelection(slide, input.selectedIds, input.alignment);
@@ -71,6 +76,19 @@ function dispatch(slide: SlideDocument, input: EditorCommandInput): EditorComman
     case "ungroup": return ungroupSelection(slide, input.selectedIds);
     case "arrange": return arrangeSelection(slide, input.selectedIds, input.arrangement);
     case "paste": return pasteClipboard(slide, input.clipboard, input.offsetDU);
+    case "lock": {
+      const roots = selectionRoots(slide, input.selectedIds);
+      return {
+        operations: roots.map((elementId) => ({
+          op: "updateElementPresentation" as const,
+          slideId: slide.id,
+          elementId,
+          changes: { locked: input.locked },
+        })),
+        nextSelectionIds: input.locked ? [] : roots,
+        affectedAutoLayoutContainerIds: [],
+      };
+    }
     case "insertText": {
       const element = createTextElement({
         geometry: input.geometry,
@@ -109,7 +127,9 @@ function reasonFor(input: EditorCommandInput): string {
     case "group": return "Group selection";
     case "ungroup": return "Ungroup selection";
     case "arrange": return `Arrange selection ${input.arrangement}`;
+    case "copy": return "Copy Pitch selection";
     case "paste": return "Paste Pitch clipboard";
+    case "lock": return input.locked ? "Lock selection" : "Unlock selection";
     case "insertText": return "Insert text";
     case "insertShape": return "Insert shape";
     case "insertFrame": return "Insert frame";
@@ -118,6 +138,18 @@ function reasonFor(input: EditorCommandInput): string {
 
 export function executeEditorCommand(deck: DeckDocument, input: EditorCommandInput): ExecutedEditorCommand {
   const slide = slideById(deck, input.slideId);
+
+  if (input.command === "copy") {
+    const clipboard = copySelection(slide, input.selectedIds);
+    return {
+      reason: reasonFor(input),
+      operations: [],
+      nextSelectionIds: clipboard.rootIds,
+      reflowedContainerIds: [],
+      clipboard,
+    };
+  }
+
   const command = dispatch(slide, input);
   const operations = command.operations.map((operation) => operation.op === "addElement"
     ? { ...operation, slideId: input.slideId }
