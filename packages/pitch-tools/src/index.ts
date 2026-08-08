@@ -35,7 +35,7 @@ export const PITCH_TOOL_DEFINITIONS: PitchToolDefinition[] = [
   },
   {
     name: "pitch_editor_command",
-    description: "Execute one professional editor command through the same canonical command engine used by the Pitch UI. Commands are atomic, versioned, hierarchy-safe, and may trigger Auto Layout reflow.",
+    description: "Execute one professional editor command through the same canonical command engine used by the Pitch UI. Commands are atomic, versioned, hierarchy-safe, and may trigger Auto Layout reflow. Use setInspector for exact geometry/opacity/name/whole-box typography changes.",
     readOnly: false,
     inputSchema: {
       oneOf: [
@@ -49,6 +49,7 @@ export const PITCH_TOOL_DEFINITIONS: PitchToolDefinition[] = [
         { type: "object", properties: { command: { const: "arrange" }, ...selectionFields, arrangement: { enum: ["bringToFront", "bringForward", "sendBackward", "sendToBack"] }, expectedDeckHash: { type: "string" } }, required: ["command", "slideId", "selectedIds", "arrangement"], additionalProperties: false },
         { type: "object", properties: { command: { const: "lock" }, ...selectionFields, locked: { type: "boolean" }, expectedDeckHash: { type: "string" } }, required: ["command", "slideId", "selectedIds", "locked"], additionalProperties: false },
         { type: "object", properties: { command: { const: "paste" }, slideId: { type: "string" }, clipboard: { type: "object" }, offsetDU: { type: "number" }, expectedDeckHash: { type: "string" } }, required: ["command", "slideId", "clipboard"], additionalProperties: false },
+        { type: "object", properties: { command: { const: "setInspector" }, slideId: { type: "string" }, elementId: { type: "string" }, geometry: { $ref: "#/$defs/geometryPatch" }, presentation: { $ref: "#/$defs/presentationPatch" }, textStyle: { $ref: "#/$defs/textStyle" }, expectedDeckHash: { type: "string" } }, required: ["command", "slideId", "elementId"], additionalProperties: false },
         { type: "object", properties: { command: { const: "insertText" }, slideId: { type: "string" }, geometry: { $ref: "#/$defs/geometry" }, text: { type: "string" }, expectedDeckHash: { type: "string" } }, required: ["command", "slideId", "geometry"], additionalProperties: false },
         { type: "object", properties: { command: { const: "insertShape" }, slideId: { type: "string" }, geometry: { $ref: "#/$defs/geometry" }, shape: { enum: ["rect", "roundRect", "ellipse", "triangle"] }, fill: { type: "string" }, expectedDeckHash: { type: "string" } }, required: ["command", "slideId", "geometry"], additionalProperties: false },
         { type: "object", properties: { command: { const: "insertFrame" }, slideId: { type: "string" }, geometry: { $ref: "#/$defs/geometry" }, fill: { type: "string" }, expectedDeckHash: { type: "string" } }, required: ["command", "slideId", "geometry"], additionalProperties: false },
@@ -56,27 +57,33 @@ export const PITCH_TOOL_DEFINITIONS: PitchToolDefinition[] = [
       $defs: {
         geometry: {
           type: "object",
-          properties: {
-            x: { type: "number" }, y: { type: "number" }, width: { type: "number", exclusiveMinimum: 0 }, height: { type: "number", exclusiveMinimum: 0 }, rotation: { type: "number" },
-          },
+          properties: { x: { type: "number" }, y: { type: "number" }, width: { type: "number", exclusiveMinimum: 0 }, height: { type: "number", exclusiveMinimum: 0 }, rotation: { type: "number" } },
           required: ["x", "y", "width", "height"],
+          additionalProperties: false,
+        },
+        geometryPatch: {
+          type: "object",
+          properties: { x: { type: "number" }, y: { type: "number" }, width: { type: "number", exclusiveMinimum: 0 }, height: { type: "number", exclusiveMinimum: 0 }, rotation: { type: "number" } },
+          minProperties: 1,
+          additionalProperties: false,
+        },
+        presentationPatch: {
+          type: "object",
+          properties: { name: { type: "string" }, opacity: { type: "number", minimum: 0, maximum: 1 }, locked: { type: "boolean" } },
+          minProperties: 1,
+          additionalProperties: false,
+        },
+        textStyle: {
+          type: "object",
+          properties: { fontFamily: { type: "string" }, fontSizePt: { type: "number", exclusiveMinimum: 0 }, color: { type: "string" }, bold: { type: "boolean" }, italic: { type: "boolean" }, underline: { type: "boolean" }, letterSpacingPt: { type: "number" } },
+          minProperties: 1,
           additionalProperties: false,
         },
       },
     },
   },
-  {
-    name: "pitch_undo",
-    description: "Undo the most recent canonical deck version on the active Pitch branch.",
-    readOnly: false,
-    inputSchema: { type: "object", properties: {}, additionalProperties: false },
-  },
-  {
-    name: "pitch_redo",
-    description: "Redo the next canonical deck version on the active Pitch branch.",
-    readOnly: false,
-    inputSchema: { type: "object", properties: {}, additionalProperties: false },
-  },
+  { name: "pitch_undo", description: "Undo the most recent canonical deck version on the active Pitch branch.", readOnly: false, inputSchema: { type: "object", properties: {}, additionalProperties: false } },
+  { name: "pitch_redo", description: "Redo the next canonical deck version on the active Pitch branch.", readOnly: false, inputSchema: { type: "object", properties: {}, additionalProperties: false } },
 ];
 
 export class PitchToolRuntime {
@@ -109,14 +116,7 @@ export class PitchToolRuntime {
                 status: slide.status,
                 purpose: slide.semantic?.purpose,
                 takeaway: slide.semantic?.takeaway,
-                elements: (slide.scene ?? []).map((element: any) => ({
-                  id: element.id,
-                  name: element.name,
-                  type: element.type,
-                  semanticRole: element.semanticRole,
-                  geometry: element.geometry,
-                  locked: Boolean(element.locked),
-                })),
+                elements: (slide.scene ?? []).map((element: any) => ({ id: element.id, name: element.name, type: element.type, semanticRole: element.semanticRole, geometry: element.geometry, locked: Boolean(element.locked) })),
               })),
             },
             qa: state.qa,
@@ -124,9 +124,7 @@ export class PitchToolRuntime {
           },
         };
       }
-      if (name === "pitch_editor_command") {
-        return { ok: true, tool: name, data: await this.backend.editorCommand(args as EditorCommandInput & { expectedDeckHash?: string }) };
-      }
+      if (name === "pitch_editor_command") return { ok: true, tool: name, data: await this.backend.editorCommand(args as EditorCommandInput & { expectedDeckHash?: string }) };
       if (name === "pitch_undo") return { ok: true, tool: name, data: await this.backend.editorUndo() };
       if (name === "pitch_redo") return { ok: true, tool: name, data: await this.backend.editorRedo() };
       return { ok: false, tool: name, error: `Unknown Pitch tool: ${name}` };
