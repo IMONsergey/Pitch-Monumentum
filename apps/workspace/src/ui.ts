@@ -62,7 +62,7 @@ export function editorSpikeHtml(): string {
 <body>
 <div class="spike-app">
   <header class="spike-top">
-    <b>Pitch Editor Engine</b><span class="sub">Pro canvas · live SceneGraph</span>
+    <b>Pitch Editor Engine</b><span class="sub">Pitch pointer engine + Daybrush controls attached to live SceneGraph</span>
     <div class="spacer"></div>
     <button id="spikeClearSelection" class="spike-btn">Clear selection</button>
     <button id="spikeRefresh" class="spike-btn">Reload scene</button>
