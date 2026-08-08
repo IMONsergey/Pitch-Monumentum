@@ -58,6 +58,38 @@ test("checkpoint compare and restore preserve newer source branch work", async (
   } finally { await h.close(); }
 });
 
+test("checkpoint restore preserves checkpoint source ancestry even when another branch is active", async () => {
+  const h = await setup();
+  try {
+    const source = await h.runtime.service.state();
+    const sourceBranchId = source.manifest.activeBranchId;
+    const checkpoint = await h.runtime.createCheckpoint("Source snapshot");
+    const checkpointHeads = structuredClone(checkpoint.heads);
+
+    const branchB = await h.runtime.createBranch("Unrelated experiment");
+    const branchBId = branchB.manifest.activeBranchId;
+    assert.notEqual(branchBId, sourceBranchId);
+    await h.runtime.service.editorCommand({ command: "nudge", slideId: "s1", selectedIds: ["shape"], dx: 300, dy: 0, expectedDeckHash: branchB.deckHash });
+    const branchBEdited = await h.runtime.service.state();
+    assert.equal((branchBEdited.deck.slides[0].scene[0] as any).geometry.x, 400);
+
+    const restored = await h.runtime.restoreCheckpoint(checkpoint.id, "Restore from source while B active");
+    const restoredBranch = restored.state.manifest.branches[restored.restoredBranchId];
+    assert.equal(restoredBranch.parentBranchId, sourceBranchId, "restore ancestry follows checkpoint.sourceBranchId, not the branch active at restore time");
+    assert.deepEqual(restoredBranch.baseHeads, checkpointHeads);
+    assert.equal((restored.state.deck.slides[0].scene[0] as any).geometry.x, 100);
+    assert.equal(restored.state.history.canUndo, false);
+
+    await h.runtime.checkout(branchBId);
+    const branchBAgain = await h.runtime.service.state();
+    assert.equal((branchBAgain.deck.slides[0].scene[0] as any).geometry.x, 400, "active unrelated branch remains untouched by restore");
+
+    await h.runtime.checkout(sourceBranchId);
+    const sourceAgain = await h.runtime.service.state();
+    assert.equal((sourceAgain.deck.slides[0].scene[0] as any).geometry.x, 100, "checkpoint source branch remains unchanged");
+  } finally { await h.close(); }
+});
+
 test("checkpoint deletion removes only the checkpoint metadata", async () => {
   const h = await setup();
   try {
