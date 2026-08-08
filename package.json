@@ -26,6 +26,7 @@
     "infinite-viewer": "^0.29.1",
     "lexical": "^0.48.0",
     "moveable": "^0.53.0",
+    "openai": "^7.1.0",
     "selecto": "^1.26.3",
     "yoga-layout": "^3.2.1"
   },
