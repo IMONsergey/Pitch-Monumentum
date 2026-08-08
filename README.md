@@ -1,49 +1,73 @@
 # Pitch Monumentum
 
-**AI-native presentation development environment for professional decisions.**
+**AI-native presentation development environment with a real professional editor under the agent layer.**
 
-Pitch Monumentum is not a prompt-to-slides toy and not a PowerPoint clone. PitchOS turns messy source material into a source-grounded argument, a coherent visual system, editable slide scene graphs, quality checks, and finally production outputs such as PowerPoint and PDF.
+Pitch Monumentum is not a prompt-to-slides toy and not a PowerPoint clone. The product is being built around a canonical presentation project that both a human visual editor and Codex can operate directly.
 
-## Product thesis
+The target is a single environment for:
 
 ```text
-Sources
-  ↓
-Evidence Graph
-  ↓
-Presentation Brief
-  ↓
-Narrative Graph
-  ↓
-Design System
-  ↓
-Storyboard
-  ↓
-Editable Scene Graphs
-  ↓
-Narrative · Evidence · Visual · Export QA
-  ↓
-PPTX · PDF · HTML · PNG
+sources / brand / old decks / prompt
+                ↓
+ evidence · brief · narrative · storyboard
+                ↓
+        editable SceneGraph editor
+                ↓
+ human editing ⇄ Codex editing ⇄ QA
+                ↓
+ components · motion · presenter · versions
+                ↓
+      PPTX · Figma · Keynote · PDF · web
 ```
 
-The internal project model — not PPTX, HTML, React or screenshots — is the source of truth.
+The internal project model — not PPTX, DOM, React or screenshots — is the source of truth.
 
-## Phase 0 is executable
+## Current product state
 
-This repository already contains a dependency-free foundation for the domain spine:
+The repository is well past its original Phase 0 foundation.
 
-- versioned artifact store;
-- SHA-256 content addressing;
-- branch metadata;
-- evidence dependency/stale propagation;
-- pipeline stage invalidation;
-- canonical deck/slide/scene model;
-- deterministic QA;
-- HTML renderer with stable object IDs;
-- Codex App Server gateway contract and JSONL stdio transport;
-- CLI demo and tests.
+### Canonical project platform
 
-### Run
+- versioned artifact store and content hashes;
+- branch heads and non-destructive forks;
+- branch-local deck history;
+- dependency/stale propagation;
+- source/evidence foundations;
+- deterministic QA/export invalidation;
+- Codex gateway/tool infrastructure.
+
+### Pro Editor
+
+- Moveable/Selecto/Guides/InfiniteViewer canvas;
+- drag/resize/rotate/nudge;
+- align/distribute/arrange;
+- frames, groups, locking and Auto Layout;
+- exact Inspector;
+- rich text;
+- gradients/shadows/appearance controls;
+- Pen/Pencil vector engine and node editing;
+- editable line/table/chart primitives;
+- storyboard create/duplicate/delete/reorder/rename;
+- native editable PPTX production path for supported primitives.
+
+### Motion & Components Studio
+
+The current major milestone adds:
+
+- branch-aware canonical `MotionDocument`;
+- slide transitions, builds and keyframes;
+- motion-specific undo/redo;
+- reusable component artifacts and instances;
+- text/image/fill/stroke component slots;
+- non-destructive image crop/fit/media controls;
+- live Motion Studio;
+- Component Library UI;
+- Presenter preview with builds, keyframes, speaker notes and fullscreen;
+- Codex/MCP tools for motion, media and components.
+
+See [`docs/IMPLEMENTED.md`](docs/IMPLEMENTED.md) for the strict implementation matrix.
+
+## Run locally
 
 ```bash
 npm install
@@ -52,16 +76,7 @@ npm run demo
 npm run serve
 ```
 
-Then open the printed local preview URL.
-
-### Simulate a source becoming stale
-
-```bash
-npm run build
-node dist/apps/cli/src/index.js stale .pitch-demo source_demo
-```
-
-Only actual descendants in the dependency graph are marked stale.
+For the professional editor use the editor route exposed by the workspace server. The repository CI also runs Chromium E2E coverage for the editor after the main `npm run check` gate.
 
 ## Key documents
 
@@ -73,16 +88,33 @@ Only actual descendants in the dependency graph are marked stale.
 - [`docs/06-PPTX-PIPELINE.md`](docs/06-PPTX-PIPELINE.md)
 - [`docs/07-QA-EVALS.md`](docs/07-QA-EVALS.md)
 - [`docs/08-ROADMAP.md`](docs/08-ROADMAP.md)
+- [`docs/12-BACKLOG.md`](docs/12-BACKLOG.md)
 - [`docs/IMPLEMENTED.md`](docs/IMPLEMENTED.md)
 
-## Codex skill
+## Codex operation
 
-The repository includes `.agents/skills/pitch-monumentum/SKILL.md` so Codex can use the project-specific presentation workflow directly from the repository.
+The repository contains project-specific agent skills under `.agents/skills/`.
 
-## Current implementation target
+The professional editor skill instructs Codex to:
 
-The next working slice is:
+1. read current Pitch project state and stable handles;
+2. use bounded canonical tool commands instead of rewriting deck JSON;
+3. use deck hashes/motion hashes for optimistic concurrency;
+4. re-read state after ID/hierarchy/history changes;
+5. use deck undo for deck mistakes and motion undo for animation mistakes.
 
-> **source ingestion → evidence anchors → brief → narrative graph → storyboard → first real multi-slide deck**
+This keeps human and agent editing on the same project model.
 
-See [`docs/12-BACKLOG.md`](docs/12-BACKLOG.md) and [`IMPLEMENTATION_PLAN.json`](IMPLEMENTATION_PLAN.json).
+## Next milestone
+
+After Motion & Components Studio, the next implementation target is **Asset & Media Production**:
+
+- real project asset storage/import;
+- thumbnails/search/metadata;
+- actual image rendering across editor/presenter/export;
+- interactive crop/focal point/masks;
+- generated images entering the same asset pipeline;
+- video/audio primitives;
+- stronger component-instance propagation and presenter fidelity.
+
+See [`docs/08-ROADMAP.md`](docs/08-ROADMAP.md) for the full milestone order through design systems, AI creative direction, collaboration, Figma/Keynote/PPTX interop and large-scale presentation intelligence.
