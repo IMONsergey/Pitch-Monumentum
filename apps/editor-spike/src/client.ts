@@ -228,28 +228,20 @@ function installInteractionEngine(): void {
     selectableTargets: ["#spikeScene .selectable"],
     selectByClick: true,
     selectFromInside: false,
-    preventDragFromInside: false,
     toggleContinueSelect: "shift",
     hitRate: 20,
   });
-  state.selecto
-    .on("dragStart", (event: AnyRecord) => {
-      const target = event.inputEvent?.target as Node | null;
-      if (!target) return;
-      const selected = selectedTargets();
-      if (state.moveable?.isMoveableElement?.(target) || selected.some((element) => element === target || element.contains(target))) {
-        event.stop();
-      }
-    })
-    .on("selectEnd", async (event: AnyRecord) => {
-      const ids = (event.selected as Element[]).map((element) => (element as HTMLElement).dataset.id).filter((id): id is string => Boolean(id));
+  state.selecto.on("selectEnd", (event: AnyRecord) => {
+    const ids = (event.selected as Element[]).map((element) => (element as HTMLElement).dataset.id).filter((id): id is string => Boolean(id));
+    if (event.isDragStart && event.inputEvent && state.moveable) {
+      event.inputEvent.preventDefault?.();
+      const handoff = state.moveable.waitToChangeTarget?.();
       updateSelection(ids);
-      if (event.isDragStart && event.inputEvent && state.moveable) {
-        event.inputEvent.preventDefault?.();
-        await state.moveable.waitToChangeTarget?.();
-        state.moveable.dragStart(event.inputEvent);
-      }
-    });
+      Promise.resolve(handoff).then(() => state.moveable?.dragStart(event.inputEvent));
+      return;
+    }
+    updateSelection(ids);
+  });
 }
 
 function installViewportAndGuides(): void {
