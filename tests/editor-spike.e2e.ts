@@ -4,38 +4,64 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
-import { chromium } from "playwright";
+import { chromium, type Browser, type Page } from "playwright";
 import { createWorkspaceServer } from "../apps/workspace/src/server.js";
 
-test("Pitch editor commits a real browser drag into the canonical deck", async () => {
-  const root = await mkdtemp(join(tmpdir(), "pitch-editor-e2e-"));
-  execFileSync(process.execPath, ["dist/apps/cli/src/index.js", "demo", root], { stdio: "inherit" });
+interface Harness {
+  root: string;
+  base: string;
+  browser: Browser;
+  page: Page;
+  close(): Promise<void>;
+}
 
+async function createHarness(prefix: string): Promise<Harness> {
+  const root = await mkdtemp(join(tmpdir(), prefix));
+  execFileSync(process.execPath, ["dist/apps/cli/src/index.js", "demo", root], { stdio: "inherit" });
   const { server } = createWorkspaceServer(root);
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const address = server.address();
   assert(address && typeof address !== "string");
   const base = `http://127.0.0.1:${address.port}`;
-
-  const before = await fetch(`${base}/api/project`).then((response) => response.json()) as any;
-  const slide = before.deck.slides[0];
-  assert(slide.scene.length > 0);
-  const canvas = before.deck.canvas;
-  const targetElement = slide.scene.find((element: any) => {
-    const geometry = element.geometry;
-    return !element.locked
-      && geometry.width > 0
-      && geometry.height > 0
-      && geometry.x + geometry.width + 80 < canvas.widthDU
-      && geometry.y + geometry.height + 60 < canvas.heightDU;
-  });
-  assert(targetElement, "Demo deck needs at least one movable scene element with free canvas space");
-  const targetId = targetElement.id;
-  const beforeGeometry = structuredClone(targetElement.geometry);
-
   const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage({ viewport: { width: 1440, height: 960 } });
+  return {
+    root,
+    base,
+    browser,
+    page,
+    async close() {
+      await browser.close();
+      await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+      await rm(root, { recursive: true, force: true });
+    },
+  };
+}
+
+async function project(base: string): Promise<any> {
+  return fetch(`${base}/api/project`).then((response) => response.json());
+}
+
+test("Pitch editor commits a real browser drag into the canonical deck", async () => {
+  const harness = await createHarness("pitch-editor-e2e-");
+  const { base, page } = harness;
   try {
-    const page = await browser.newPage({ viewport: { width: 1440, height: 960 } });
+    const before = await project(base);
+    const slide = before.deck.slides[0];
+    assert(slide.scene.length > 0);
+    const canvas = before.deck.canvas;
+    const targetElement = slide.scene.find((element: any) => {
+      const geometry = element.geometry;
+      return !element.locked
+        && geometry.width > 0
+        && geometry.height > 0
+        && geometry.x + geometry.width + 80 < canvas.widthDU
+        && geometry.y + geometry.height + 60 < canvas.heightDU;
+    });
+    assert(targetElement, "Demo deck needs at least one movable scene element with free canvas space");
+    const targetId = targetElement.id;
+    const beforeGeometry = structuredClone(targetElement.geometry);
+
     await page.goto(`${base}/editor-spike`, { waitUntil: "networkidle" });
     await page.getByText("Pitch pointer engine + Daybrush controls attached to live SceneGraph").waitFor();
 
@@ -61,7 +87,7 @@ test("Pitch editor commits a real browser drag into the canonical deck", async (
       throw new Error(`Editor drag did not commit. status=${status}; telemetry=${JSON.stringify(telemetry)}`);
     }
 
-    const after = await fetch(`${base}/api/project`).then((response) => response.json()) as any;
+    const after = await project(base);
     const afterElement = after.deck.slides[0].scene.find((element: any) => element.id === targetId);
     assert(afterElement);
     const moved = afterElement.geometry.x !== beforeGeometry.x || afterElement.geometry.y !== beforeGeometry.y;
@@ -71,8 +97,54 @@ test("Pitch editor commits a real browser drag into the canonical deck", async (
     }
     assert.notEqual(after.deckHash, before.deckHash);
   } finally {
-    await browser.close();
-    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
-    await rm(root, { recursive: true, force: true });
+    await harness.close();
+  }
+});
+
+test("in-canvas Lexical editing persists mixed formatting as canonical TextRuns", async () => {
+  const harness = await createHarness("pitch-text-e2e-");
+  const { base, page } = harness;
+  try {
+    const before = await project(base);
+    let slide: any;
+    let textElement: any;
+    for (const candidate of before.deck.slides) {
+      const found = candidate.scene.find((element: any) => element.type === "text" && !element.locked);
+      if (found) { slide = candidate; textElement = found; break; }
+    }
+    assert(slide && textElement, "Demo deck needs an unlocked text element");
+    const originalText = textElement.paragraphs.flatMap((paragraph: any) => paragraph.runs.map((run: any) => run.text)).join("");
+
+    await page.goto(`${base}/editor-spike`, { waitUntil: "networkidle" });
+    const target = page.locator(`#spikeScene [data-id="${textElement.id}"]`);
+    await target.dblclick();
+    await page.locator(`#spikeScene [data-id="${textElement.id}"][data-pitch-text-editing="true"]`).waitFor();
+    await page.locator("#pitchTextToolbar.visible").waitFor();
+
+    await target.press("Control+A");
+    await page.locator("[data-text-action=bold]").click();
+    await target.press("ArrowRight");
+    await page.locator("[data-text-action=bold]").click();
+    await target.pressSequentially(" EXTRA", { delay: 10 });
+    await page.locator("[data-text-action=commit]").click();
+
+    await page.waitForFunction(async (beforeHash) => {
+      const response = await fetch("/api/project");
+      const next = await response.json();
+      return next.deckHash !== beforeHash;
+    }, before.deckHash, { timeout: 10_000 });
+
+    const after = await project(base);
+    const afterElement = after.deck.slides.find((item: any) => item.id === slide.id).scene.find((item: any) => item.id === textElement.id);
+    assert(afterElement);
+    const runs = afterElement.paragraphs.flatMap((paragraph: any) => paragraph.runs);
+    const finalText = runs.map((run: any) => run.text).join("");
+    assert.equal(finalText, `${originalText} EXTRA`);
+    assert(runs.some((run: any) => run.bold === true), `Expected a bold run, got ${JSON.stringify(runs)}`);
+    assert(runs.some((run: any) => !run.bold && run.text.includes("EXTRA")), `Expected an unbold appended run, got ${JSON.stringify(runs)}`);
+    assert(!JSON.stringify(afterElement).includes('"root"'), "Lexical editor state must not leak into canonical text element");
+    assert.notEqual(after.deckHash, before.deckHash);
+  } finally {
+    await harness.close();
   }
 });
