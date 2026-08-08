@@ -2,7 +2,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import type { ChartElement, DeckDocument } from "../../deck-model/src/index.js";
 import { dataStoryQuality } from "../../data-storytelling/src/index.js";
-import { compileDeckWithAppearance } from "../../pptx-appearance/src/index.js";
+import { compileDeckWithIdentity } from "../../pptx-identity/src/index.js";
 import { validatePptxAppearance } from "../../pptx-appearance-qa/src/index.js";
 import type { RichAsset } from "../../pptx-rich/src/index.js";
 import { validatePptxRoundTrip, type RoundTripIssue } from "../../pptx-roundtrip/src/index.js";
@@ -195,7 +195,7 @@ export async function exportProductionPptx(deck: DeckDocument, outputPath: strin
   const blockingPreflight = preflightIssues.filter((issue) => issue.severity === "critical");
   if (blockingPreflight.length && !allowDraft) throw new ProductionExportBlockedError(blockingPreflight);
 
-  const compiled = await compileDeckWithAppearance(deck, outputPath, options.assets ?? {});
+  const compiled = await compileDeckWithIdentity(deck, outputPath, options.assets ?? {});
   const finalElementResults = normalizeCompileResults(deck, compiled.elementResults);
   const editability = strategyCounts(finalElementResults);
   const unsupportedElementIds = finalElementResults.filter((item) => item.strategy === "unsupported").map((item) => item.elementId);
