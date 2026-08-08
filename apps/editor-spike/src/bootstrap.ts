@@ -15,6 +15,8 @@ import { installPitchComponentsUI } from "./components-ui.js";
 import { installPitchPresenterUI } from "./presenter-ui.js";
 import { installPitchContextPreserver } from "./context-preserver.js";
 import { installPitchCommandPaletteUI } from "./command-palette-ui.js";
+import { installPitchAssetsUI } from "./assets-ui.js";
+import { installPitchAssetRenderer } from "./asset-render-ui.js";
 import "./client.js";
 
 installPitchContextPreserver();
@@ -33,4 +35,6 @@ installPitchMotionUI();
 installPitchMediaUI();
 installPitchComponentsUI();
 installPitchPresenterUI();
+installPitchAssetsUI();
+installPitchAssetRenderer();
 installPitchCommandPaletteUI();
