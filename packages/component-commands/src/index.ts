@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { DeckDocument, SceneElement, SlideDocument } from "../../deck-model/src/index.js";
 import {
   instantiateComponent,
+  validateComponentDefinition,
   type ComponentDefinition,
   type ComponentOverride,
   type ComponentInstanceTransform,
@@ -72,6 +73,8 @@ function autoSlots(elements: SceneElement[]): ComponentSlot[] {
   for (const element of elements) {
     if (element.type === "text") slots.push({ id: `text_${element.id}`, name: element.name || "Text", kind: "text", targetElementId: element.id });
     if (element.type === "image") slots.push({ id: `image_${element.id}`, name: element.name || "Image", kind: "image", targetElementId: element.id });
+    if ((element.type === "shape" || element.type === "frame") && element.fill) slots.push({ id: `fill_${element.id}`, name: `${element.name || "Object"} fill`, kind: "fill", targetElementId: element.id });
+    if ((element.type === "shape" || element.type === "line") && element.stroke) slots.push({ id: `stroke_${element.id}`, name: `${element.name || "Object"} stroke`, kind: "stroke", targetElementId: element.id });
   }
   return slots;
 }
@@ -82,7 +85,7 @@ export function createComponentDefinitionFromSelection(input: CreateComponentInp
   const box = bounds(closure.elements);
   const included = new Set(closure.elements.map((element) => element.id));
   const elements = closure.elements.map((element) => localizeElement(element, included, box.left, box.top));
-  return {
+  const definition: ComponentDefinition = {
     schemaVersion: "0.1",
     id: input.componentId?.trim() || `component_${randomUUID()}`,
     name: input.name.trim(),
@@ -93,6 +96,8 @@ export function createComponentDefinitionFromSelection(input: CreateComponentInp
     elements,
     slots: autoSlots(elements),
   };
+  validateComponentDefinition(definition);
+  return definition;
 }
 
 export function instantiateComponentIntoDeck(input: InstantiateComponentInput) {
