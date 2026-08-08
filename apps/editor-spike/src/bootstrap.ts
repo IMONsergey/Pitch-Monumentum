@@ -12,6 +12,7 @@ import { installPitchSlideUI } from "./slide-ui.js";
 import { installPitchMotionUI } from "./motion-ui.js";
 import { installPitchMediaUI } from "./media-ui.js";
 import { installPitchComponentsUI } from "./components-ui.js";
+import { installPitchPresenterUI } from "./presenter-ui.js";
 import "./client.js";
 
 installPitchRichTextUI();
@@ -28,3 +29,4 @@ installPitchSlideUI();
 installPitchMotionUI();
 installPitchMediaUI();
 installPitchComponentsUI();
+installPitchPresenterUI();
