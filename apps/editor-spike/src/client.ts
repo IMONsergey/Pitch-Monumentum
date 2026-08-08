@@ -1,20 +1,31 @@
-import Moveable from "moveable";
-import Selecto from "selecto";
-import Guides from "@scena/guides";
-import InfiniteViewer from "infinite-viewer";
+import * as MoveableModule from "moveable";
+import * as SelectoModule from "selecto";
+import * as GuidesModule from "@scena/guides";
+import * as InfiniteViewerModule from "infinite-viewer";
 
 type AnyRecord = Record<string, any>;
 type ProjectState = AnyRecord & { deck: AnyRecord; deckHash: string };
+type VendorInstance = any;
+type VendorConstructor = new (...args: any[]) => VendorInstance;
+
+function vendorConstructor(module: AnyRecord): VendorConstructor {
+  return (module.default ?? module) as VendorConstructor;
+}
+
+const Moveable = vendorConstructor(MoveableModule as AnyRecord);
+const Selecto = vendorConstructor(SelectoModule as AnyRecord);
+const Guides = vendorConstructor(GuidesModule as AnyRecord);
+const InfiniteViewer = vendorConstructor(InfiniteViewerModule as AnyRecord);
 
 const state: {
   project: ProjectState | null;
   slideId: string | null;
   selectedIds: string[];
-  moveable: Moveable | null;
-  selecto: Selecto | null;
-  viewer: InfiniteViewer | null;
-  horizontalGuide: Guides | null;
-  verticalGuide: Guides | null;
+  moveable: VendorInstance | null;
+  selecto: VendorInstance | null;
+  viewer: VendorInstance | null;
+  horizontalGuide: VendorInstance | null;
+  verticalGuide: VendorInstance | null;
 } = {
   project: null,
   slideId: null,
@@ -62,10 +73,10 @@ function textStyle(run: AnyRecord): string {
 
 function draw(element: AnyRecord): string {
   const selected = state.selectedIds.includes(element.id) ? " selected" : "";
-  const common = `class="spike-el selectable${selected}" data-id="${esc(element.id)}" data-rotation="${element.geometry.rotation || 0}" style="${styleFor(element)}"`;
+  const common = `class="spike-el selectable${selected}" data-id="${esc(element.id)}" data-rotation="${element.geometry.rotation || 0}"`;
   if (element.type === "text") {
     const body = element.paragraphs.map((paragraph: AnyRecord) => `<div style="text-align:${esc(paragraph.align || "left")};line-height:${paragraph.lineSpacing || 1.2}">${paragraph.runs.map((run: AnyRecord) => `<span style="${textStyle(run)}">${esc(run.text)}</span>`).join("")}</div>`).join("");
-    return `<div ${common}>${body}</div>`;
+    return `<div ${common} style="${styleFor(element)}">${body}</div>`;
   }
   if (element.type === "shape") {
     const border = element.stroke ? `${Math.max(1, element.stroke.widthDU)}px solid ${esc(element.stroke.color)}` : "none";
@@ -90,9 +101,9 @@ function renderStoryboard(): void {
 
 function renderScene(): void {
   const slide = currentSlide();
-  if (!slide) return;
+  if (!slide || !state.project) return;
   $("#spikeScene").innerHTML = [...slide.scene].sort((a: AnyRecord, b: AnyRecord) => a.zIndex - b.zIndex).map(draw).join("");
-  $("#spikeSlideLabel").textContent = `${slide.order + 1} / ${state.project!.deck.slides.length} · ${slide.title}`;
+  $("#spikeSlideLabel").textContent = `${slide.order + 1} / ${state.project.deck.slides.length} · ${slide.title}`;
 }
 
 function selectedTargets(): HTMLElement[] {
@@ -157,13 +168,13 @@ function installInteractionEngine(): void {
   });
 
   state.moveable
-    .on("drag", ({ target, left, top }) => {
+    .on("drag", ({ target, left, top }: AnyRecord) => {
       const node = target as HTMLElement;
       node.style.left = `${Math.round(left)}px`;
       node.style.top = `${Math.round(top)}px`;
     })
     .on("dragEnd", () => void commitSelection("Move selection"))
-    .on("resize", ({ target, width, height, drag }) => {
+    .on("resize", ({ target, width, height, drag }: AnyRecord) => {
       const node = target as HTMLElement;
       node.style.width = `${Math.max(1, Math.round(width))}px`;
       node.style.height = `${Math.max(1, Math.round(height))}px`;
@@ -173,22 +184,22 @@ function installInteractionEngine(): void {
       }
     })
     .on("resizeEnd", () => void commitSelection("Resize selection"))
-    .on("rotate", ({ target, beforeRotate }) => {
+    .on("rotate", ({ target, beforeRotate }: AnyRecord) => {
       const node = target as HTMLElement;
       node.dataset.rotation = String(beforeRotate);
       node.style.transform = `rotate(${beforeRotate}deg)`;
     })
     .on("rotateEnd", () => void commitSelection("Rotate selection"))
-    .on("dragGroup", ({ events }) => {
-      events.forEach(({ target, left, top }) => {
+    .on("dragGroup", ({ events }: AnyRecord) => {
+      events.forEach(({ target, left, top }: AnyRecord) => {
         const node = target as HTMLElement;
         node.style.left = `${Math.round(left)}px`;
         node.style.top = `${Math.round(top)}px`;
       });
     })
     .on("dragGroupEnd", () => void commitSelection("Move selection group"))
-    .on("resizeGroup", ({ events }) => {
-      events.forEach(({ target, width, height, drag }) => {
+    .on("resizeGroup", ({ events }: AnyRecord) => {
+      events.forEach(({ target, width, height, drag }: AnyRecord) => {
         const node = target as HTMLElement;
         node.style.width = `${Math.max(1, Math.round(width))}px`;
         node.style.height = `${Math.max(1, Math.round(height))}px`;
@@ -199,8 +210,8 @@ function installInteractionEngine(): void {
       });
     })
     .on("resizeGroupEnd", () => void commitSelection("Resize selection group"))
-    .on("rotateGroup", ({ events }) => {
-      events.forEach(({ target, beforeRotate }) => {
+    .on("rotateGroup", ({ events }: AnyRecord) => {
+      events.forEach(({ target, beforeRotate }: AnyRecord) => {
         const node = target as HTMLElement;
         node.dataset.rotation = String(beforeRotate);
         node.style.transform = `rotate(${beforeRotate}deg)`;
@@ -217,8 +228,8 @@ function installInteractionEngine(): void {
     toggleContinueSelect: "shift",
     hitRate: 20,
   });
-  state.selecto.on("selectEnd", ({ selected }) => {
-    updateSelection(selected.map((element) => (element as HTMLElement).dataset.id).filter((id): id is string => Boolean(id)));
+  state.selecto.on("selectEnd", ({ selected }: AnyRecord) => {
+    updateSelection((selected as Element[]).map((element) => (element as HTMLElement).dataset.id).filter((id): id is string => Boolean(id)));
   });
 }
 
@@ -258,8 +269,9 @@ function renderAll(): void {
 }
 
 async function load(): Promise<void> {
-  state.project = await api("/api/project");
-  state.slideId = state.project.deck.slides[0]?.id ?? null;
+  const project = await api("/api/project") as ProjectState;
+  state.project = project;
+  state.slideId = project.deck.slides[0]?.id ?? null;
   renderAll();
   installViewportAndGuides();
   $("#spikeStatus").textContent = "Daybrush engine attached to live Pitch SceneGraph";
