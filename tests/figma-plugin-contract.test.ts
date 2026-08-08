@@ -19,6 +19,17 @@ test("Figma bridge plugin has no network allowlist and imports editable native n
   assert.equal(/fetch\s*\(/.test(code), false, "local importer should not require network fetches");
 });
 
+test("Figma importer preserves mixed rich-text ranges with loaded fonts", async () => {
+  const code = await readFile(codePath, "utf8");
+  assert.match(code, /figma\.loadFontAsync/);
+  assert.match(code, /setRangeFontName/);
+  assert.match(code, /setRangeFontSize/);
+  assert.match(code, /setRangeFills/);
+  assert.match(code, /setRangeTextDecoration/);
+  assert.match(code, /fontStyle/);
+  assert.match(code, /autoRename\s*=\s*false/);
+});
+
 test("Figma importer retains explicit structured fallbacks rather than pretending all nodes are native", async () => {
   const code = await readFile(codePath, "utf8");
   assert.match(code, /editable structured payload stored in plugin data/);
