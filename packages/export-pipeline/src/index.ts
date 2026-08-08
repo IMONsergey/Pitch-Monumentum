@@ -94,8 +94,46 @@ function chartIssues(deck: DeckDocument): ExportPreflightIssue[] {
   return issues;
 }
 
+/**
+ * Reports known target-specific visual approximations without pretending they are
+ * exact round trips. These issues do not block production export because the object
+ * remains editable and structurally intact; the UI can surface them before export.
+ */
+export function powerPointStyleFidelityIssues(deck: DeckDocument): ExportPreflightIssue[] {
+  const issues: ExportPreflightIssue[] = [];
+  for (const slide of deck.slides) {
+    for (const element of slide.scene) {
+      if ((element.type === "shape" || element.type === "frame") && (element.radiusDU ?? 0) > 0) {
+        issues.push({
+          severity: "minor",
+          lane: "export",
+          slideId: slide.id,
+          elementId: element.id,
+          code: "pptx:corner-radius-approximate",
+          message: "PowerPoint keeps this object editable but currently approximates the Pitch corner radius with a native preset geometry.",
+        });
+      }
+      if (element.type === "image" && (element.cornerRadiusDU ?? 0) > 0) {
+        issues.push({
+          severity: "major",
+          lane: "export",
+          slideId: slide.id,
+          elementId: element.id,
+          code: "pptx:image-corner-radius-not-preserved",
+          message: "The image remains a native editable picture, but its Pitch corner radius is not yet preserved by the PowerPoint picture compiler.",
+        });
+      }
+    }
+  }
+  return issues;
+}
+
 export function productionPreflight(deck: DeckDocument): ExportPreflightIssue[] {
-  return [...deterministicIssues(runDeterministicQA(deck)), ...chartIssues(deck)];
+  return [
+    ...deterministicIssues(runDeterministicQA(deck)),
+    ...chartIssues(deck),
+    ...powerPointStyleFidelityIssues(deck),
+  ];
 }
 
 const STRATEGY_PRIORITY: Record<CompileStrategy, number> = { native: 4, vector: 3, rasterFallback: 2, unsupported: 1 };
@@ -148,7 +186,12 @@ export async function exportProductionPptx(deck: DeckDocument, outputPath: strin
   const roundTrip = await validatePptxRoundTrip(deck, outputPath);
   const blockingRoundTrip = roundTrip.issues.filter((issue) => issue.severity === "critical");
   const ready = blockingPreflight.length === 0 && blockingRoundTrip.length === 0 && unsupportedElementIds.length === 0;
-  const warnings = finalElementResults.flatMap((item) => item.warnings.map((warning) => `${item.elementId}: ${warning}`));
+  const warnings = [
+    ...preflightIssues
+      .filter((issue) => issue.severity === "minor" || issue.severity === "major")
+      .map((issue) => `${issue.elementId ?? issue.slideId ?? "deck"}: ${issue.message}`),
+    ...finalElementResults.flatMap((item) => item.warnings.map((warning) => `${item.elementId}: ${warning}`)),
+  ];
 
   const manifest: ProductionExportManifest = {
     schemaVersion: "0.1",
@@ -163,7 +206,7 @@ export async function exportProductionPptx(deck: DeckDocument, outputPath: strin
     preflightIssues,
     roundTripIssues: roundTrip.issues,
     unsupportedElementIds,
-    warnings,
+    warnings: [...new Set(warnings)],
   };
   await writeManifest(options.manifestPath ?? `${outputPath}.manifest.json`, manifest);
 
