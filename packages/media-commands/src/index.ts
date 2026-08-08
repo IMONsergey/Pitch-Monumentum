@@ -1,5 +1,4 @@
-import type { DeckDocument, ImageElement } from "../../deck-model/src/index.js";
-import type { DeckMutationOperation } from "../../mutations/src/index.js";
+import type { DeckDocument, ImageElement, SlideDocument } from "../../deck-model/src/index.js";
 
 export type ImageCrop = NonNullable<ImageElement["crop"]>;
 
@@ -10,18 +9,21 @@ export type MediaCommand =
   | { command: "setImageCornerRadius"; slideId: string; elementId: string; cornerRadiusDU: number | null };
 
 export interface MediaCommandResult {
-  operations: DeckMutationOperation[];
+  deck: DeckDocument;
+  changed: boolean;
   reason: string;
+  affectedSlideIds: string[];
+  affectedElementIds: string[];
   nextSelectionIds: string[];
 }
 
-function image(deck: DeckDocument, slideId: string, elementId: string): ImageElement {
+function resolveImage(deck: DeckDocument, slideId: string, elementId: string): { slide: SlideDocument; image: ImageElement } {
   const slide = deck.slides.find((item) => item.id === slideId);
   if (!slide) throw new Error(`Unknown slide: ${slideId}`);
   const element = slide.scene.find((item) => item.id === elementId);
   if (!element) throw new Error(`Unknown element ${elementId} on slide ${slideId}`);
   if (element.type !== "image") throw new Error(`Element ${elementId} is not an image`);
-  return element;
+  return { slide, image: element };
 }
 
 export function validateImageCrop(crop: ImageCrop): void {
@@ -32,32 +34,49 @@ export function validateImageCrop(crop: ImageCrop): void {
   if (crop.top + crop.bottom >= 1) throw new Error("Image crop top + bottom must leave visible height");
 }
 
+function replaceImage(deck: DeckDocument, slide: SlideDocument, image: ImageElement, nextImage: ImageElement): DeckDocument {
+  if (JSON.stringify(image) === JSON.stringify(nextImage)) return deck;
+  return {
+    ...deck,
+    slides: deck.slides.map((item) => item.id === slide.id ? {
+      ...item,
+      status: "draft",
+      scene: item.scene.map((element) => element.id === image.id ? nextImage : element),
+    } : item),
+    updatedAt: new Date().toISOString(),
+  };
+}
+
 export function executeMediaCommand(deck: DeckDocument, command: MediaCommand): MediaCommandResult {
-  image(deck, command.slideId, command.elementId);
-  let operation: DeckMutationOperation;
+  const { slide, image } = resolveImage(deck, command.slideId, command.elementId);
+  let nextImage: ImageElement = structuredClone(image);
   let reason: string;
 
   if (command.command === "setImageFit") {
-    operation = { op: "updateElementStyle", slideId: command.slideId, elementId: command.elementId, style: { kind: "image", fit: command.fit } };
+    nextImage.fit = command.fit;
     reason = `Set image fit ${command.fit}`;
   } else if (command.command === "setImageCrop") {
     if (command.crop) validateImageCrop(command.crop);
-    operation = { op: "updateElementStyle", slideId: command.slideId, elementId: command.elementId, style: { kind: "image", crop: command.crop } };
+    nextImage.crop = command.crop ? structuredClone(command.crop) : undefined;
     reason = command.crop ? `Crop image ${command.elementId}` : `Reset image crop ${command.elementId}`;
   } else if (command.command === "replaceImageAsset") {
     if (!command.assetId.trim()) throw new Error("assetId is required");
-    operation = {
-      op: "updateElementStyle",
-      slideId: command.slideId,
-      elementId: command.elementId,
-      style: { kind: "image", assetId: command.assetId.trim(), ...(command.alt !== undefined ? { alt: command.alt } : {}) },
-    };
+    nextImage.assetId = command.assetId.trim();
+    if (command.alt !== undefined) nextImage.alt = command.alt ?? undefined;
     reason = `Replace image asset on ${command.elementId}`;
   } else {
     if (command.cornerRadiusDU !== null && (!Number.isFinite(command.cornerRadiusDU) || command.cornerRadiusDU < 0)) throw new Error("Image corner radius must be non-negative");
-    operation = { op: "updateElementStyle", slideId: command.slideId, elementId: command.elementId, style: { kind: "image", cornerRadiusDU: command.cornerRadiusDU } };
+    nextImage.cornerRadiusDU = command.cornerRadiusDU ?? undefined;
     reason = `Set image corner radius on ${command.elementId}`;
   }
 
-  return { operations: [operation], reason, nextSelectionIds: [command.elementId] };
+  const nextDeck = replaceImage(deck, slide, image, nextImage);
+  return {
+    deck: nextDeck,
+    changed: nextDeck !== deck,
+    reason,
+    affectedSlideIds: [slide.id],
+    affectedElementIds: [image.id],
+    nextSelectionIds: [image.id],
+  };
 }
