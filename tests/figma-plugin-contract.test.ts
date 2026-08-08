@@ -30,6 +30,20 @@ test("Figma importer preserves mixed rich-text ranges with loaded fonts", async 
   assert.match(code, /autoRename\s*=\s*false/);
 });
 
+test("Figma typography uses canonical duPerInch and native paragraph range APIs", async () => {
+  const code = await readFile(codePath, "utf8");
+  assert.match(code, /function ptToDU/);
+  assert.match(code, /document\.canvas\?\.duPerInch/);
+  assert.match(code, /setRangeLetterSpacing/);
+  assert.match(code, /setRangeLineHeight/);
+  assert.match(code, /setRangeParagraphSpacing/);
+  assert.match(code, /setRangeListOptions/);
+  assert.match(code, /lineSpacing \* 100/);
+  assert.match(code, /pitchDuPerInch/);
+  assert.match(code, /ORDERED/);
+  assert.match(code, /UNORDERED/);
+});
+
 test("Figma importer retains explicit structured fallbacks rather than pretending all nodes are native", async () => {
   const code = await readFile(codePath, "utf8");
   assert.match(code, /editable structured payload stored in plugin data/);
