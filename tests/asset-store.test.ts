@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, unlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ProjectAssetStore } from "../packages/asset-store/src/index.js";
@@ -16,12 +16,20 @@ function deck(assetId?: string): DeckDocument {
   };
 }
 
-test("project image assets deduplicate by content and expose PPTX rich assets", async () => {
+function videoPosterDeck(assetId: string): DeckDocument {
+  const value = deck();
+  value.slides[0].scene = [{ id: "video", type: "video", semanticRole: "visual", geometry: { x: 100, y: 100, width: 500, height: 400 }, zIndex: 1, origin: "user", exportStrategy: "rasterFallback", dependencies: [{ kind: "asset", id: assetId }], assetId: "asset_aaaaaaaaaaaaaaaaaaaa", posterAssetId: assetId }];
+  return value;
+}
+
+test("project image assets validate bytes, derive dimensions, deduplicate and expose PPTX rich assets", async () => {
   const root = await mkdtemp(join(tmpdir(), "pitch-assets-"));
   try {
     const store = new ProjectAssetStore(root);
-    const first = await store.importImage({ filename: "one.png", mimeType: "image/png", dataBase64: PNG, width: 1, height: 1, source: "upload" });
-    const second = await store.importImage({ filename: "duplicate.png", mimeType: "image/png", dataBase64: PNG, width: 1, height: 1, source: "clipboard" });
+    const first = await store.importImage({ filename: "one.png", mimeType: "image/png", dataBase64: PNG, width: 999, height: 777, source: "upload" });
+    assert.equal(first.width, 1);
+    assert.equal(first.height, 1);
+    const second = await store.importImage({ filename: "duplicate.png", mimeType: "image/png", dataBase64: PNG, source: "clipboard" });
     assert.equal(second.id, first.id);
     assert.equal((await store.list()).length, 1);
     assert.equal((await store.content(first.id)).metadata.sha256, first.sha256);
@@ -31,6 +39,7 @@ test("project image assets deduplicate by content and expose PPTX rich assets", 
     assert.equal(rich[first.id].mimeType, "image/png");
     assert.match(rich[first.id].path, /original\.png$/);
     await assert.rejects(() => store.remove(first.id, withImage), /still used/);
+    await assert.rejects(() => store.remove(first.id, videoPosterDeck(first.id)), /still used/);
     await store.remove(first.id, deck());
     assert.equal((await store.list()).length, 0);
   } finally {
@@ -38,12 +47,28 @@ test("project image assets deduplicate by content and expose PPTX rich assets", 
   }
 });
 
-test("asset store rejects unsupported and oversized image payloads", async () => {
+test("asset store rejects unsupported, malformed and MIME-spoofed image payloads", async () => {
   const root = await mkdtemp(join(tmpdir(), "pitch-assets-invalid-"));
   try {
     const store = new ProjectAssetStore(root);
     await assert.rejects(() => store.importImage({ filename: "x.webp", mimeType: "image/webp", dataBase64: PNG }), /Unsupported image type/);
     await assert.rejects(() => store.importImage({ filename: "empty.png", mimeType: "image/png", dataBase64: "" }), /empty/);
+    await assert.rejects(() => store.importImage({ filename: "broken.png", mimeType: "image/png", dataBase64: Buffer.from("not an image").toString("base64") }), /not a valid PNG or JPEG/);
+    await assert.rejects(() => store.importImage({ filename: "spoof.jpg", mimeType: "image/jpeg", dataBase64: PNG }), /bytes are PNG/);
+    await assert.rejects(() => store.importImage({ filename: "bad.png", mimeType: "image/png", dataBase64: "%%%" }), /invalid base64/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("PPTX asset resolution fails loudly when canonical image bytes are missing", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pitch-assets-missing-"));
+  try {
+    const store = new ProjectAssetStore(root);
+    const asset = await store.importImage({ filename: "one.png", mimeType: "image/png", dataBase64: PNG });
+    const content = await store.content(asset.id);
+    await unlink(content.path);
+    await assert.rejects(() => store.richAssetMapForDeck(deck(asset.id)), /missing or unreadable image asset/);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
