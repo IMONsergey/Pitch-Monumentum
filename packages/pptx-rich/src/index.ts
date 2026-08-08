@@ -9,11 +9,20 @@ import type {
   ShapeElement,
   TableElement,
 } from "../../deck-model/src/index.js";
+import {
+  containGeometryForImage,
+  coverCropForImage,
+  cropToPercent,
+  effectiveImageClipShape,
+  normalizedImageCrop,
+} from "../../image-layout/src/index.js";
 import { compileDeckToPptx, type PptxCompileResult } from "../../pptx/src/index.js";
 
 export interface RichAsset {
   path: string;
   mimeType?: "image/png" | "image/jpeg";
+  width?: number;
+  height?: number;
 }
 
 export type RichAssetMap = Record<string, RichAsset>;
@@ -183,15 +192,39 @@ function addImageRelationship(rels: string, id: string, target: string): string 
   );
 }
 
-function cropRect(image: ImageElement): string {
-  if (!image.crop) return "";
-  const convert = (value: number) => Math.max(0, Math.min(100000, Math.round(value <= 1 ? value * 100000 : value)));
-  return `<a:srcRect l="${convert(image.crop.left)}" t="${convert(image.crop.top)}" r="${convert(image.crop.right)}" b="${convert(image.crop.bottom)}"/>`;
+function dimensions(asset: RichAsset): { width: number; height: number } | undefined {
+  if (!Number.isFinite(asset.width) || !Number.isFinite(asset.height) || (asset.width ?? 0) <= 0 || (asset.height ?? 0) <= 0) return undefined;
+  return { width: asset.width!, height: asset.height! };
 }
 
-function pictureXml(image: ImageElement, relationshipId: string, shapeId: number, name: string): string {
-  const geometry = image.geometry;
-  return `<p:pic><p:nvPicPr><p:cNvPr id="${shapeId}" name="${xml(name)}"/><p:cNvPicPr><a:picLocks noChangeAspect="1"/></p:cNvPicPr><p:nvPr/></p:nvPicPr><p:blipFill><a:blip r:embed="${relationshipId}"/>${cropRect(image)}<a:stretch><a:fillRect/></a:stretch></p:blipFill><p:spPr><a:xfrm><a:off x="${emu(geometry.x)}" y="${emu(geometry.y)}"/><a:ext cx="${emu(geometry.width)}" cy="${emu(geometry.height)}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr></p:pic>`;
+function cropRect(image: ImageElement, asset: RichAsset): string {
+  const size = dimensions(asset);
+  const crop = size && image.fit === "cover" ? coverCropForImage(image, size) : normalizedImageCrop(image.crop);
+  if (crop.left <= 0 && crop.top <= 0 && crop.right <= 0 && crop.bottom <= 0) return "";
+  const percent = cropToPercent(crop);
+  return `<a:srcRect l="${percent.left}" t="${percent.top}" r="${percent.right}" b="${percent.bottom}"/>`;
+}
+
+function pictureGeometry(image: ImageElement, asset: RichAsset) {
+  const size = dimensions(asset);
+  return size ? containGeometryForImage(image, size) : image.geometry;
+}
+
+function picturePreset(image: ImageElement): "rect" | "roundRect" | "ellipse" {
+  return effectiveImageClipShape(image);
+}
+
+function pictureXml(image: ImageElement, asset: RichAsset, relationshipId: string, shapeId: number, name: string): string {
+  const geometry = pictureGeometry(image, asset);
+  const preset = picturePreset(image);
+  return `<p:pic><p:nvPicPr><p:cNvPr id="${shapeId}" name="${xml(name)}"/><p:cNvPicPr><a:picLocks noChangeAspect="1"/></p:cNvPicPr><p:nvPr/></p:nvPicPr><p:blipFill><a:blip r:embed="${relationshipId}"/>${cropRect(image, asset)}<a:stretch><a:fillRect/></a:stretch></p:blipFill><p:spPr><a:xfrm><a:off x="${emu(geometry.x)}" y="${emu(geometry.y)}"/><a:ext cx="${emu(geometry.width)}" cy="${emu(geometry.height)}"/></a:xfrm><a:prstGeom prst="${preset}"><a:avLst/></a:prstGeom></p:spPr></p:pic>`;
+}
+
+function imageWarnings(image: ImageElement, asset: RichAsset): string[] {
+  const warnings: string[] = [];
+  if (!dimensions(asset) && (image.fit !== "stretch" || image.focalPoint)) warnings.push("Asset dimensions are unavailable; PowerPoint fit/focal fidelity may be approximate");
+  if (picturePreset(image) === "roundRect" && (image.cornerRadiusDU ?? 0) > 0) warnings.push("PowerPoint uses a native roundRect preset; exact authored image corner radius is approximate");
+  return warnings;
 }
 
 function cellXml(text: string): string {
@@ -311,8 +344,8 @@ export async function compileRichDeckToPptx(
         entries.set(mediaPath, await readFile(asset.path));
         contentTypes = ensureContentType(contentTypes, extension, mime);
         relationships = addImageRelationship(relationships, relationshipId, `../media/${mediaName}`);
-        slideXml = injectIntoShapeTree(slideXml, pictureXml(element, relationshipId, 2000 + relationshipIndex, element.name || element.id));
-        richElementResults.push({ elementId: element.id, strategy: "native", kind: "image", warnings: [] });
+        slideXml = injectIntoShapeTree(slideXml, pictureXml(element, asset, relationshipId, 2000 + relationshipIndex, element.name || element.id));
+        richElementResults.push({ elementId: element.id, strategy: "native", kind: "image", warnings: imageWarnings(element, asset) });
       } else {
         slideXml = injectIntoShapeTree(slideXml, tableXml(element, 3000 + relationshipIndex++));
         richElementResults.push({ elementId: element.id, strategy: "native", kind: "table", warnings: [] });
