@@ -52,7 +52,13 @@ test("undo redo follows only the active branch history", async () => {
   await service.checkout(forkId); assert.equal(text(await service.state()), "CFO state");
 });
 
-test("workspace exports active branch to a real PPTX", async () => {
-  const service = await setup(); const result = await service.exportPptx();
-  assert.equal(result.result.slideCount, 1); assert.equal(result.result.elementResults[0].strategy, "native"); assert.match(result.path, /\.pptx$/);
+test("workspace production-export gate returns a ready editable PPTX manifest", async () => {
+  const service = await setup();
+  const exported = await service.exportPptx();
+  assert.equal(exported.manifest.slideCount, 1);
+  assert.equal(exported.manifest.ready, true);
+  assert.equal(exported.manifest.editability.unsupported, 0);
+  assert.equal(exported.manifest.editability.native, 1);
+  assert.equal(exported.manifest.roundTripIssues.some((issue) => issue.severity === "critical"), false);
+  assert.match(exported.path, /\.pptx$/);
 });
