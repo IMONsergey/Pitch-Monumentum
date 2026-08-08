@@ -11,9 +11,11 @@ import type {
   StrokeStyle,
   TextElement,
   TextParagraph,
+  VectorPathData,
   VisualEffect,
 } from "../../deck-model/src/index.js";
 import { stableStringify } from "../../shared/src/index.js";
+import { validateVectorPathData, vectorPathToSvg } from "../../vector-path/src/index.js";
 
 export type MutationOrigin = "user" | "codex" | "deterministic";
 export type ElementStylePatch =
@@ -63,6 +65,12 @@ export type DeckMutationOperation =
       slideId: string;
       elementId: string;
       appearance: ElementAppearancePatch;
+    }
+  | {
+      op: "updateVectorPath";
+      slideId: string;
+      elementId: string;
+      pathData: VectorPathData;
     }
   | {
       op: "updateAutoLayout";
@@ -364,6 +372,13 @@ function applyOperation(deck: DeckDocument, operation: DeckMutationOperation): D
       return mutateElement(deck, operation.slideId, operation.elementId, (element) => applyElementStyle(element, operation.style));
     case "updateElementAppearance":
       return mutateElement(deck, operation.slideId, operation.elementId, (element) => applyElementAppearance(element, operation.appearance));
+    case "updateVectorPath":
+      return mutateElement(deck, operation.slideId, operation.elementId, (element) => {
+        if (element.type !== "shape" || element.shape !== "custom") throw new Error(`Element ${operation.elementId} is not an editable custom vector`);
+        validateVectorPathData(operation.pathData);
+        const pathData = structuredClone(operation.pathData);
+        return { ...element, pathData, svgPath: vectorPathToSvg(pathData) };
+      });
     case "updateAutoLayout":
       return mutateElement(deck, operation.slideId, operation.elementId, (element) => {
         if (!isContainer(element)) throw new Error(`Element ${operation.elementId} cannot own auto layout`);
@@ -437,6 +452,7 @@ function impactForOperation(deck: DeckDocument, operation: DeckMutationOperation
   if (
     operation.op === "updateGeometry"
     || operation.op === "updateElementAppearance"
+    || operation.op === "updateVectorPath"
     || operation.op === "updateAutoLayout"
     || operation.op === "updateLayoutItem"
     || operation.op === "updateContainerChildren"
