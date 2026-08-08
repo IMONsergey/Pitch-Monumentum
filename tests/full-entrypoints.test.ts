@@ -12,9 +12,11 @@ test("full stack is the default npm product surface", () => {
   assert.match(pkg.scripts.desktop, /desktop-full\/src\/main\.js/);
   assert.match(pkg.scripts["package:mac:x64"], /package-desktop-full\.mjs/);
   assert.match(pkg.scripts["pitch:mcp"], /pitch-mcp-full\/src\/server\.js/);
+  assert.match(pkg.scripts["release:preflight"], /release-preflight-full\.mjs/);
   assert.match(pkg.scripts["workspace:core"], /workspace\/src\/server\.js/);
   assert.match(pkg.scripts["desktop:core"], /desktop\/src\/main\.js/);
   assert.match(pkg.scripts["pitch:mcp:core"], /pitch-mcp\/src\/server\.js/);
+  assert.match(pkg.scripts["package:mac:x64:core"], /electron-builder\.core\.yml/);
 });
 
 test("desktop full points at the stable desktop runtime", () => {
@@ -31,6 +33,7 @@ test("desktop full points at the stable desktop runtime", () => {
 test("only the Desktop Full packaging path remains authoritative", () => {
   assert(existsSync("electron-builder.full.yml"));
   assert(existsSync("scripts/package-desktop-full.mjs"));
+  assert(existsSync("scripts/release-preflight-full.mjs"));
   assert(existsSync(".github/workflows/desktop-full-macos.yml"));
   for (const legacy of [
     "electron-builder.next.yml",
@@ -41,6 +44,7 @@ test("only the Desktop Full packaging path remains authoritative", () => {
   ]) assert.equal(existsSync(legacy), false, `${legacy} must stay removed`);
 
   const packager = text("scripts/package-desktop-full.mjs");
+  assert.match(packager, /release-preflight-full\.mjs/);
   assert.match(packager, /desktop-runtime\/src\/main\.js/);
   assert.match(packager, /desktop-runtime\/src\/preload\.js/);
   assert.match(packager, /pitch-mcp-full\/src\/server\.js/);
@@ -51,4 +55,13 @@ test("only the Desktop Full packaging path remains authoritative", () => {
   assert.match(workflow, /x86_64/);
   assert.match(workflow, /shasum -a 256/);
   assert.match(workflow, /workflow_dispatch/);
+});
+
+test("legacy Core packaging remains explicit and cannot inherit Desktop Full main", () => {
+  assert(existsSync("electron-builder.core.yml"));
+  const core = text("electron-builder.core.yml");
+  assert.match(core, /main:\s*dist\/apps\/desktop\/src\/main\.js/);
+  assert.match(core, /output:\s*release-core/);
+  assert.match(core, /Pitch-Monumentum-core/);
+  assert.doesNotMatch(core, /desktop-full\/src\/main\.js/);
 });
