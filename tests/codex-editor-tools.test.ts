@@ -2,7 +2,13 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import type { DeckDocument } from "../packages/deck-model/src/index.js";
 import { deckHash } from "../packages/mutations/src/index.js";
-import { executePitchEditorTool, pitchEditorToolDefinition } from "../packages/codex-editor-tools/src/index.js";
+import {
+  executePitchCodexTool,
+  executePitchEditorTool,
+  pitchCodexToolDefinitions,
+  pitchEditorToolDefinition,
+  pitchSetStyleToolDefinition,
+} from "../packages/codex-editor-tools/src/index.js";
 
 function fixture(): DeckDocument {
   return {
@@ -112,10 +118,71 @@ test("Codex insert creates a normal native scene element with agent provenance",
   assert.equal(inserted.exportStrategy, "native");
 });
 
-test("tool schema is strict and exposes bounded professional editor commands", () => {
+test("broad editor tool is explicitly transitional while style is a narrow strict tool", () => {
   assert.equal(pitchEditorToolDefinition.name, "pitch_editor_command");
-  assert.equal(pitchEditorToolDefinition.strict, true);
+  assert.equal(pitchEditorToolDefinition.strict, false);
   assert.equal(pitchEditorToolDefinition.parameters.additionalProperties, false);
   assert((pitchEditorToolDefinition.parameters.properties.command.enum as readonly string[]).includes("group"));
   assert((pitchEditorToolDefinition.parameters.properties.command.enum as readonly string[]).includes("insertFrame"));
+
+  assert.equal(pitchSetStyleToolDefinition.name, "pitch_set_style");
+  assert.equal(pitchSetStyleToolDefinition.strict, true);
+  assert.equal(pitchSetStyleToolDefinition.parameters.additionalProperties, false);
+  assert.equal(pitchSetStyleToolDefinition.parameters.required.length, Object.keys(pitchSetStyleToolDefinition.parameters.properties).length);
+  assert.equal(pitchCodexToolDefinitions.length, 2);
+});
+
+test("strict pitch_set_style changes exactly one canonical visual object", () => {
+  const deck = fixture();
+  const result = executePitchCodexTool(deck, {
+    name: "pitch_set_style",
+    expectedDeckHash: deckHash(deck),
+    arguments: {
+      slideId: "s1",
+      elementId: "a",
+      kind: "shape",
+      fill: "#1122AA",
+      strokeColor: "#000000",
+      strokeWidthDU: 3,
+      dash: "dash",
+      radiusDU: 18,
+      clipContent: null,
+      fit: null,
+      cornerRadiusDU: null,
+      startMarker: null,
+      endMarker: null,
+    },
+  });
+  const shape = result.applied.deck.slides[0].scene.find((element) => element.id === "a");
+  const neighbor = result.applied.deck.slides[0].scene.find((element) => element.id === "b");
+  assert(shape && shape.type === "shape");
+  if (!shape || shape.type !== "shape") throw new Error("Expected styled shape");
+  assert.equal(shape.fill, "#1122AA");
+  assert.deepEqual(shape.stroke, { color: "#000000", widthDU: 3, dash: "dash" });
+  assert.equal(shape.radiusDU, 18);
+  assert.equal(neighbor?.type, "shape");
+  if (neighbor?.type === "shape") assert.equal(neighbor.fill, "#dddddd");
+  assert.equal(result.tool, "pitch_set_style");
+  assert.deepEqual(result.nextSelectionIds, ["a"]);
+});
+
+test("strict style tool rejects a semantic type mismatch", () => {
+  assert.throws(() => executePitchCodexTool(fixture(), {
+    name: "pitch_set_style",
+    arguments: {
+      slideId: "s1",
+      elementId: "a",
+      kind: "image",
+      fill: null,
+      strokeColor: null,
+      strokeWidthDU: null,
+      dash: null,
+      radiusDU: null,
+      clipContent: null,
+      fit: "contain",
+      cornerRadiusDU: 12,
+      startMarker: null,
+      endMarker: null,
+    },
+  }), /does not match shape element/);
 });
