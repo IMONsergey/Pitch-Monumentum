@@ -1,5 +1,6 @@
 import type { VectorPathData } from "../../../packages/deck-model/src/index.js";
-import { deleteVectorAnchor } from "../../../packages/vector-path/src/edit.js";
+import { deleteVectorAnchor, splitVectorSegment } from "../../../packages/vector-path/src/edit.js";
+import { nearestVectorSegment } from "../../../packages/vector-path/src/hit-test.js";
 import { moveVectorAnchor, moveVectorHandle, vectorAnchors, vectorPathBounds, vectorPathToSvg } from "../../../packages/vector-path/src/index.js";
 
 type AnyRecord = Record<string, any>;
@@ -47,6 +48,7 @@ function ensureOverlay(): SVGSVGElement | null {
   overlay.style.cssText = "position:absolute;inset:0;width:1920px;height:1080px;z-index:10020;overflow:visible;pointer-events:none";
   stage.appendChild(overlay);
   overlay.addEventListener("pointerdown", onPointerDown);
+  overlay.addEventListener("dblclick", onSegmentDoubleClick, true);
   return overlay;
 }
 
@@ -66,7 +68,7 @@ function slideToLocal(x: number, y: number): { x: number; y: number } {
   };
 }
 
-function pointerToSlide(event: PointerEvent): { x: number; y: number } {
+function clientToSlide(event: { clientX: number; clientY: number }): { x: number; y: number } {
   const stage = document.getElementById("spikeStage")!;
   const rect = stage.getBoundingClientRect();
   return {
@@ -101,8 +103,12 @@ function renderOverlay(): void {
   preview.setAttribute("d", vectorPathToSvg(workingPath));
   preview.setAttribute("fill", "none");
   preview.setAttribute("stroke", "#335CFF");
-  preview.setAttribute("stroke-width", "2");
+  preview.setAttribute("stroke-width", "6");
+  preview.setAttribute("stroke-opacity", ".65");
   preview.setAttribute("vector-effect", "non-scaling-stroke");
+  preview.dataset.vectorSegmentSurface = "true";
+  preview.style.pointerEvents = "stroke";
+  preview.style.cursor = "copy";
   const sx = sourceGeometry.width / Math.max(.001, sourceBounds.width);
   const sy = sourceGeometry.height / Math.max(.001, sourceBounds.height);
   preview.setAttribute("transform", `translate(${sourceGeometry.x} ${sourceGeometry.y}) scale(${sx} ${sy}) translate(${-sourceBounds.left} ${-sourceBounds.top})`);
@@ -150,7 +156,7 @@ function onPointerDown(event: PointerEvent): void {
 
 function onPointerMove(event: PointerEvent): void {
   if (!drag || drag.pointerId !== event.pointerId || !workingPath) return;
-  const slidePoint = pointerToSlide(event);
+  const slidePoint = clientToSlide(event);
   const local = slideToLocal(slidePoint.x, slidePoint.y);
   workingPath = drag.kind === "anchor"
     ? moveVectorAnchor(drag.original, drag.commandIndex, local.x, local.y, true)
@@ -184,6 +190,24 @@ function onPointerUp(event: PointerEvent): void {
   void commitVectorPath().catch(error => status(`Vector edit failed: ${error instanceof Error ? error.message : String(error)}`));
 }
 
+function onSegmentDoubleClick(event: MouseEvent): void {
+  const target = event.target as HTMLElement | null;
+  if (!workingPath || target?.dataset.vectorSegmentSurface !== "true") return;
+  event.preventDefault(); event.stopPropagation();
+  const slidePoint = clientToSlide(event);
+  const local = slideToLocal(slidePoint.x, slidePoint.y);
+  const hit = nearestVectorSegment(workingPath, local, 48);
+  if (!hit) return;
+  try {
+    workingPath = splitVectorSegment(workingPath, hit.commandIndex, hit.t);
+    selectedAnchor = hit.commandIndex;
+    previewPath(); renderOverlay();
+    void commitVectorPath("Add vector point").catch(error => status(`Add point failed: ${error instanceof Error ? error.message : String(error)}`));
+  } catch (error) {
+    status(`Add point blocked: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
 function enter(elementId: string): void {
   const editor = runtime();
   const slide = editor?.getSlide();
@@ -200,7 +224,7 @@ function enter(elementId: string): void {
   selectedAnchor = null;
   editor?.select([elementId]);
   renderOverlay();
-  status("Edit Vector · drag anchors/handles · Delete removes selected anchor · Esc exits");
+  status("Edit Vector · drag anchors/handles · double-click segment adds point · Delete removes point · Esc exits");
 }
 
 function exit(): void {
