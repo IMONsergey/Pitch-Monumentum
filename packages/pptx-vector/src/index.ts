@@ -4,6 +4,8 @@ import type { DeckDocument, ShapeElement } from "../../deck-model/src/index.js";
 import { compileDeckWithNativeCharts, type ChartCompileResult } from "../../pptx-charts/src/index.js";
 import type { RichAssetMap } from "../../pptx-rich/src/index.js";
 import { readZipMap, writeZipMap } from "../../source-ingest/src/zip.js";
+import { effectiveVectorSvgPath } from "../../vector-engine/src/index.js";
+import { vectorPathBounds } from "../../vector-engine/src/path-utils.js";
 
 const IMAGE_REL = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image";
 const REL_NS = "http://schemas.openxmlformats.org/package/2006/relationships";
@@ -12,6 +14,8 @@ interface CustomPathRef {
   slideIndex: number;
   element: ShapeElement;
   marker: string;
+  svgPath: string;
+  viewBox: { left: number; top: number; width: number; height: number };
 }
 
 function xml(value: unknown): string {
@@ -31,14 +35,25 @@ function customPaths(deck: DeckDocument): CustomPathRef[] {
   deck.slides.forEach((slide, slideIndex) => {
     slide.scene.forEach((element) => {
       if (element.type !== "shape" || element.shape !== "custom") return;
-      if (!element.svgPath?.trim()) throw new Error(`Custom shape ${element.id} is missing svgPath`);
-      result.push({ slideIndex, element, marker: markerFor(element.id) });
+      const svgPath = effectiveVectorSvgPath(element)?.trim();
+      if (!svgPath) throw new Error(`Custom shape ${element.id} is missing pathData/svgPath`);
+      const intrinsic = element.pathData
+        ? vectorPathBounds(element.pathData)
+        : { left: 0, top: 0, width: Math.max(0.01, element.geometry.width), height: Math.max(0.01, element.geometry.height) };
+      result.push({
+        slideIndex,
+        element,
+        marker: markerFor(element.id),
+        svgPath,
+        viewBox: { left: intrinsic.left, top: intrinsic.top, width: intrinsic.width, height: intrinsic.height },
+      });
     });
   });
   return result;
 }
 
-function svgFor(element: ShapeElement): string {
+function svgFor(vector: CustomPathRef): string {
+  const element = vector.element;
   const width = Math.max(0.01, element.geometry.width);
   const height = Math.max(0.01, element.geometry.height);
   const fill = element.fill && element.fill.toLowerCase() !== "transparent" ? element.fill : "none";
@@ -49,7 +64,9 @@ function svgFor(element: ShapeElement): string {
     : element.stroke?.dash === "dot"
       ? `${Math.max(1, strokeWidth)} ${Math.max(1, strokeWidth * 1.5)}`
       : undefined;
-  return `<?xml version="1.0" encoding="UTF-8"?>\n<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}"><path d="${xml(element.svgPath)}" fill="${xml(fill)}" stroke="${xml(stroke)}" stroke-width="${strokeWidth}"${dash ? ` stroke-dasharray="${xml(dash)}"` : ""} stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+  const box = vector.viewBox;
+  const fillRule = element.pathData?.fillRule ?? "nonzero";
+  return `<?xml version="1.0" encoding="UTF-8"?>\n<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="${box.left} ${box.top} ${box.width} ${box.height}" preserveAspectRatio="none"><path d="${xml(vector.svgPath)}" fill="${xml(fill)}" fill-rule="${fillRule}" stroke="${xml(stroke)}" stroke-width="${strokeWidth}"${dash ? ` stroke-dasharray="${xml(dash)}"` : ""} vector-effect="non-scaling-stroke" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
 }
 
 function nextRelationshipId(xmlText: string): string {
@@ -59,11 +76,8 @@ function nextRelationshipId(xmlText: string): string {
 
 function addRelationship(existing: Buffer | undefined, relationshipId: string, target: string): Buffer {
   const relation = `<Relationship Id="${relationshipId}" Type="${IMAGE_REL}" Target="${xml(target)}"/>`;
-  if (!existing) {
-    return Buffer.from(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="${REL_NS}">${relation}</Relationships>`, "utf8");
-  }
-  const source = existing.toString("utf8");
-  return Buffer.from(source.replace("</Relationships>", `${relation}</Relationships>`), "utf8");
+  if (!existing) return Buffer.from(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="${REL_NS}">${relation}</Relationships>`, "utf8");
+  return Buffer.from(existing.toString("utf8").replace("</Relationships>", `${relation}</Relationships>`), "utf8");
 }
 
 function ensureSvgContentType(entries: Map<string, Buffer>): void {
@@ -125,7 +139,7 @@ export async function compileDeckWithVectors(deck: DeckDocument, outputPath: str
     const existingRels = entries.get(relsPath);
     const relationshipId = nextRelationshipId(existingRels?.toString("utf8") ?? "");
     const mediaName = `image${mediaIndex++}.svg`;
-    entries.set(`ppt/media/${mediaName}`, Buffer.from(svgFor(vector.element), "utf8"));
+    entries.set(`ppt/media/${mediaName}`, Buffer.from(svgFor(vector), "utf8"));
     entries.set(relsPath, addRelationship(existingRels, relationshipId, `../media/${mediaName}`));
     entries.set(slidePath, Buffer.from(replaceMarkerShape(slideSource, vector.marker, (objectId) => pictureXml(vector.element, relationshipId, objectId)), "utf8"));
   }
@@ -134,17 +148,11 @@ export async function compileDeckWithVectors(deck: DeckDocument, outputPath: str
   await writeFile(outputPath, buffer);
   const vectorIds = new Set(vectors.map((vector) => vector.element.id));
   const elementResults = compiled.elementResults.map((result) => vectorIds.has(result.elementId)
-    ? { elementId: result.elementId, strategy: "vector" as const, warnings: ["Custom SVG path exported as vector SVG media; DrawingML custom geometry is not emitted yet"] }
+    ? { elementId: result.elementId, strategy: "vector" as const, warnings: ["Custom path exported as editable vector SVG media; DrawingML custom geometry is not emitted yet"] }
     : result);
   const warnings = [
     ...compiled.warnings.filter((warning) => !vectors.some((vector) => warning.includes(vector.element.id))),
-    ...vectors.map((vector) => `Custom vector ${vector.element.id} exported as SVG media`),
+    ...vectors.map((vector) => `Custom vector ${vector.element.id} exported as SVG media from canonical pathData/svgPath`),
   ];
-  return {
-    ...compiled,
-    outputPath,
-    elementResults,
-    warnings,
-    contentHash: createHash("sha256").update(buffer).digest("hex"),
-  };
+  return { ...compiled, outputPath, elementResults, warnings, contentHash: createHash("sha256").update(buffer).digest("hex") };
 }
