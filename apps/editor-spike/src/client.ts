@@ -183,7 +183,10 @@ function applyGeometryPreview(elementId: string, changes: Partial<Geometry>): vo
 }
 
 function updateSelection(ids: string[]): void {
-  state.selectedIds = [...new Set(ids.filter((id) => !sceneElement(id)?.locked))];
+  state.selectedIds = [...new Set(ids.filter((id) => {
+    const element = sceneElement(id);
+    return Boolean(element && !element.locked);
+  }))];
   document.querySelectorAll<HTMLElement>("#spikeScene .selectable").forEach((element) => element.classList.toggle("selected", state.selectedIds.includes(element.dataset.id ?? "")));
   if (state.moveable) {
     state.moveable.target = selectedTargets();
@@ -256,6 +259,8 @@ function selectionMoveBounds(): { minDx: number; maxDx: number; minDy: number; m
 }
 
 function installPitchPointerDrag(scene: HTMLElement, stage: HTMLElement): void {
+  if (scene.dataset.pitchPointerDragInstalled === "true") return;
+  scene.dataset.pitchPointerDragInstalled = "true";
   scene.addEventListener("pointerdown", (event: PointerEvent) => {
     if (event.button !== 0 || !state.selectedIds.length) return;
     const target = (event.target as Element | null)?.closest<HTMLElement>(".selectable");
