@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { SceneElement, TextParagraph } from "../../deck-model/src/index.js";
+import type { ImageElement, SceneElement, TextParagraph } from "../../deck-model/src/index.js";
 import { validateSceneHierarchy } from "../../mutations/src/index.js";
 
 export type ComponentSlotKind = "text" | "image" | "fill" | "stroke";
@@ -23,9 +23,20 @@ export interface ComponentDefinition {
   slots: ComponentSlot[];
 }
 
+export type ComponentImageOverrideValue = {
+  kind: "image";
+  assetId: string;
+  alt?: string | null;
+  fit?: ImageElement["fit"];
+  crop?: ImageElement["crop"] | null;
+  focalPoint?: ImageElement["focalPoint"] | null;
+  clipShape?: ImageElement["clipShape"] | null;
+  cornerRadiusDU?: number | null;
+};
+
 export type ComponentOverrideValue =
   | { kind: "text"; paragraphs: TextParagraph[] }
-  | { kind: "image"; assetId: string; alt?: string }
+  | ComponentImageOverrideValue
   | { kind: "fill"; color: string }
   | { kind: "stroke"; color: string; widthDU?: number; dash?: "solid" | "dash" | "dot" };
 
@@ -145,6 +156,45 @@ function overrideMap(overrides: ComponentOverride[]): Map<string, ComponentOverr
   return map;
 }
 
+function validCrop(crop: NonNullable<ImageElement["crop"]>, slotId: string): void {
+  for (const [key, value] of Object.entries(crop)) {
+    if (!Number.isFinite(value) || value < 0 || value >= 1) throw new Error(`Image override ${slotId} crop ${key} must be between 0 and 1`);
+  }
+  if (crop.left + crop.right >= 1 || crop.top + crop.bottom >= 1) throw new Error(`Image override ${slotId} crop must leave visible content`);
+}
+
+function applyImageOverride(next: Extract<SceneElement, { type: "image" }>, slotId: string, value: ComponentImageOverrideValue): void {
+  if (!value.assetId.trim()) throw new Error(`Image override ${slotId} assetId is required`);
+  next.assetId = value.assetId;
+  if (value.alt !== undefined) {
+    if (value.alt === null) delete next.alt;
+    else next.alt = value.alt;
+  }
+  if (value.fit !== undefined) next.fit = value.fit;
+  if (value.crop !== undefined) {
+    if (value.crop === null) delete next.crop;
+    else { validCrop(value.crop, slotId); next.crop = structuredClone(value.crop); }
+  }
+  if (value.focalPoint !== undefined) {
+    if (value.focalPoint === null) delete next.focalPoint;
+    else {
+      if (!Number.isFinite(value.focalPoint.x) || value.focalPoint.x < 0 || value.focalPoint.x > 1 || !Number.isFinite(value.focalPoint.y) || value.focalPoint.y < 0 || value.focalPoint.y > 1) throw new Error(`Image override ${slotId} focal point must be normalized`);
+      next.focalPoint = structuredClone(value.focalPoint);
+    }
+  }
+  if (value.clipShape !== undefined) {
+    if (value.clipShape === null) delete next.clipShape;
+    else next.clipShape = value.clipShape;
+  }
+  if (value.cornerRadiusDU !== undefined) {
+    if (value.cornerRadiusDU === null) delete next.cornerRadiusDU;
+    else {
+      if (!Number.isFinite(value.cornerRadiusDU) || value.cornerRadiusDU < 0) throw new Error(`Image override ${slotId} corner radius must be non-negative`);
+      next.cornerRadiusDU = value.cornerRadiusDU;
+    }
+  }
+}
+
 function applyOverride(element: SceneElement, slot: ComponentSlot, value: ComponentOverrideValue): SceneElement {
   const next: any = structuredClone(element);
   if (slot.kind !== value.kind) throw new Error(`Override ${slot.id} expects ${slot.kind}, got ${value.kind}`);
@@ -153,9 +203,7 @@ function applyOverride(element: SceneElement, slot: ComponentSlot, value: Compon
     next.paragraphs = structuredClone(value.paragraphs);
   } else if (value.kind === "image") {
     if (next.type !== "image") throw new Error(`Image override ${slot.id} target is not image`);
-    if (!value.assetId.trim()) throw new Error(`Image override ${slot.id} assetId is required`);
-    next.assetId = value.assetId;
-    if (value.alt !== undefined) next.alt = value.alt;
+    applyImageOverride(next, slot.id, value);
   } else if (value.kind === "fill") {
     if (next.type !== "shape" && next.type !== "frame") throw new Error(`Fill override ${slot.id} target cannot be filled`);
     next.fill = color(value.color, `Fill override ${slot.id}`);
