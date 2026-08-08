@@ -4,21 +4,29 @@ import type {
   DeckDocument,
   Geometry,
   LayoutItemSpec,
+  Paint,
   SceneElement,
   SlideDocument,
   SlideSemanticContract,
+  StrokeStyle,
   TextElement,
   TextParagraph,
+  VisualEffect,
 } from "../../deck-model/src/index.js";
 import { stableStringify } from "../../shared/src/index.js";
 
 export type MutationOrigin = "user" | "codex" | "deterministic";
-export type StrokeStyle = { color: string; widthDU: number; dash?: "solid" | "dash" | "dot" };
 export type ElementStylePatch =
   | { kind: "shape"; fill?: string | null; stroke?: StrokeStyle | null; radiusDU?: number | null }
   | { kind: "frame"; fill?: string | null; stroke?: StrokeStyle | null; radiusDU?: number | null; clipContent?: boolean }
   | { kind: "image"; cornerRadiusDU?: number | null; fit?: "cover" | "contain" | "stretch" }
   | { kind: "line"; stroke?: StrokeStyle; startMarker?: "none" | "arrow" | "dot"; endMarker?: "none" | "arrow" | "dot" };
+
+export interface ElementAppearancePatch {
+  fillPaint?: Paint;
+  clearFillPaint?: boolean;
+  effects?: VisualEffect[];
+}
 
 export type DeckMutationOperation =
   | {
@@ -49,6 +57,12 @@ export type DeckMutationOperation =
       slideId: string;
       elementId: string;
       style: ElementStylePatch;
+    }
+  | {
+      op: "updateElementAppearance";
+      slideId: string;
+      elementId: string;
+      appearance: ElementAppearancePatch;
     }
   | {
       op: "updateAutoLayout";
@@ -125,11 +139,6 @@ function isContainer(element: SceneElement): element is Extract<SceneElement, { 
   return element.type === "frame" || element.type === "group";
 }
 
-/**
- * Validates the canonical parent/child tree after an atomic mutation batch.
- * Intermediate states inside a transaction may temporarily have duplicate parents
- * while reparenting; the committed scene may not.
- */
 export function validateSceneHierarchy(scene: SceneElement[]): void {
   const index = new Map<string, SceneElement>();
   for (const element of scene) {
@@ -160,9 +169,7 @@ export function validateSceneHierarchy(scene: SceneElement[]): void {
     if (visited.has(id)) return;
     visiting.add(id);
     const element = index.get(id);
-    if (element && isContainer(element)) {
-      for (const childId of element.childIds) visit(childId);
-    }
+    if (element && isContainer(element)) for (const childId of element.childIds) visit(childId);
     visiting.delete(id);
     visited.add(id);
   };
@@ -241,6 +248,45 @@ function valueOrUndefined<T>(value: T | null | undefined): T | undefined {
   return value === null ? undefined : value;
 }
 
+function validHexColor(color: string): boolean {
+  return /^#[0-9a-f]{6}$/i.test(color);
+}
+
+function validateOpacity(value: number, label: string): void {
+  if (!Number.isFinite(value) || value < 0 || value > 1) throw new Error(`${label} must be between 0 and 1`);
+}
+
+export function validatePaint(paint: Paint): void {
+  if (paint.kind === "none") return;
+  if (paint.kind === "solid") {
+    if (!validHexColor(paint.color)) throw new Error(`Invalid solid paint color: ${paint.color}`);
+    if (paint.opacity !== undefined) validateOpacity(paint.opacity, "paint opacity");
+    return;
+  }
+  if (!Number.isFinite(paint.angleDeg)) throw new Error("Gradient angle must be finite");
+  if (paint.stops.length < 2) throw new Error("Linear gradient needs at least two stops");
+  let previous = -Infinity;
+  for (const stop of paint.stops) {
+    if (!Number.isFinite(stop.position) || stop.position < 0 || stop.position > 1) throw new Error("Gradient stop position must be between 0 and 1");
+    if (stop.position < previous) throw new Error("Gradient stops must be sorted by position");
+    previous = stop.position;
+    if (!validHexColor(stop.color)) throw new Error(`Invalid gradient stop color: ${stop.color}`);
+    if (stop.opacity !== undefined) validateOpacity(stop.opacity, "gradient stop opacity");
+  }
+}
+
+export function validateEffects(effects: VisualEffect[]): void {
+  for (const effect of effects) {
+    if (effect.kind !== "dropShadow") throw new Error(`Unsupported visual effect: ${(effect as { kind?: string }).kind}`);
+    if (!validHexColor(effect.color)) throw new Error(`Invalid shadow color: ${effect.color}`);
+    validateOpacity(effect.opacity, "shadow opacity");
+    for (const [label, value] of [["shadow blur", effect.blurDU], ["shadow x", effect.offsetXDU], ["shadow y", effect.offsetYDU]] as const) {
+      if (!Number.isFinite(value)) throw new Error(`${label} must be finite`);
+    }
+    if (effect.blurDU < 0) throw new Error("shadow blur must be non-negative");
+  }
+}
+
 function applyElementStyle(element: SceneElement, style: ElementStylePatch): SceneElement {
   if (style.kind === "shape") {
     if (element.type !== "shape") throw new Error(`Element ${element.id} is not a shape`);
@@ -278,6 +324,28 @@ function applyElementStyle(element: SceneElement, style: ElementStylePatch): Sce
   };
 }
 
+function applyElementAppearance(element: SceneElement, appearance: ElementAppearancePatch): SceneElement {
+  if (appearance.fillPaint !== undefined) {
+    if (element.type !== "shape" && element.type !== "frame") throw new Error(`Element ${element.id} cannot have fillPaint`);
+    validatePaint(appearance.fillPaint);
+  }
+  if (appearance.effects !== undefined) validateEffects(appearance.effects);
+
+  if (element.type === "shape" || element.type === "frame") {
+    return {
+      ...element,
+      ...(appearance.clearFillPaint ? { fillPaint: undefined } : {}),
+      ...(appearance.fillPaint !== undefined ? { fillPaint: structuredClone(appearance.fillPaint) } : {}),
+      ...(appearance.effects !== undefined ? { effects: structuredClone(appearance.effects) } : {}),
+    };
+  }
+  if (appearance.fillPaint !== undefined || appearance.clearFillPaint) throw new Error(`Element ${element.id} cannot have fillPaint`);
+  return {
+    ...element,
+    ...(appearance.effects !== undefined ? { effects: structuredClone(appearance.effects) } : {}),
+  };
+}
+
 function applyOperation(deck: DeckDocument, operation: DeckMutationOperation): DeckDocument {
   switch (operation.op) {
     case "replaceText":
@@ -291,22 +359,18 @@ function applyOperation(deck: DeckDocument, operation: DeckMutationOperation): D
         geometry: { ...element.geometry, ...operation.geometry },
       }));
     case "updateElementPresentation":
-      return mutateElement(deck, operation.slideId, operation.elementId, (element) => ({
-        ...element,
-        ...operation.changes,
-      }));
+      return mutateElement(deck, operation.slideId, operation.elementId, (element) => ({ ...element, ...operation.changes }));
     case "updateElementStyle":
       return mutateElement(deck, operation.slideId, operation.elementId, (element) => applyElementStyle(element, operation.style));
+    case "updateElementAppearance":
+      return mutateElement(deck, operation.slideId, operation.elementId, (element) => applyElementAppearance(element, operation.appearance));
     case "updateAutoLayout":
       return mutateElement(deck, operation.slideId, operation.elementId, (element) => {
         if (!isContainer(element)) throw new Error(`Element ${operation.elementId} cannot own auto layout`);
         return { ...element, layout: operation.layout ?? undefined };
       });
     case "updateLayoutItem":
-      return mutateElement(deck, operation.slideId, operation.elementId, (element) => ({
-        ...element,
-        layoutItem: operation.layoutItem ?? undefined,
-      }));
+      return mutateElement(deck, operation.slideId, operation.elementId, (element) => ({ ...element, layoutItem: operation.layoutItem ?? undefined }));
     case "updateContainerChildren":
       return mutateElement(deck, operation.slideId, operation.elementId, (element) => {
         if (!isContainer(element)) throw new Error(`Element ${operation.elementId} is not a frame/group container`);
@@ -315,11 +379,7 @@ function applyOperation(deck: DeckDocument, operation: DeckMutationOperation): D
     case "addElement": {
       ensureUniqueElementId(deck, operation.element);
       const slide = findSlide(deck, operation.slideId);
-      return replaceSlide(deck, operation.slideId, {
-        ...slide,
-        scene: [...slide.scene, operation.element],
-        status: "draft",
-      });
+      return replaceSlide(deck, operation.slideId, { ...slide, scene: [...slide.scene, operation.element], status: "draft" });
     }
     case "removeElement": {
       const slide = findSlide(deck, operation.slideId);
@@ -333,11 +393,7 @@ function applyOperation(deck: DeckDocument, operation: DeckMutationOperation): D
     }
     case "updateSlideSemantic": {
       const slide = findSlide(deck, operation.slideId);
-      return replaceSlide(deck, operation.slideId, {
-        ...slide,
-        semantic: { ...slide.semantic, ...operation.changes },
-        status: "draft",
-      });
+      return replaceSlide(deck, operation.slideId, { ...slide, semantic: { ...slide.semantic, ...operation.changes }, status: "draft" });
     }
     case "setSlideTitle": {
       const slide = findSlide(deck, operation.slideId);
@@ -380,6 +436,7 @@ function impactForOperation(deck: DeckDocument, operation: DeckMutationOperation
   }
   if (
     operation.op === "updateGeometry"
+    || operation.op === "updateElementAppearance"
     || operation.op === "updateAutoLayout"
     || operation.op === "updateLayoutItem"
     || operation.op === "updateContainerChildren"
