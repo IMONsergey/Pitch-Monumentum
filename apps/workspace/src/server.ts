@@ -2,6 +2,7 @@ import { createServer } from "node:http";
 import { mkdir, readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { ArtifactStore, type ProjectManifest, type BranchArtifactHead } from "../../../packages/artifact-store/src/index.js";
+import { ProjectAssetStore, type ImportImageAssetInput } from "../../../packages/asset-store/src/index.js";
 import type { AutoLayoutSpec, DeckDocument } from "../../../packages/deck-model/src/index.js";
 import { applyDeckMutation, createMutation, deckHash, type DeckMutationOperation } from "../../../packages/mutations/src/index.js";
 import { setAutoLayoutMutationOperations, wrapSelectionInAutoLayoutOperations } from "../../../packages/auto-layout/src/index.js";
@@ -21,6 +22,15 @@ import { editorSpikeHtml, workspaceHtml } from "./ui.js";
 function json(res: any, status: number, value: unknown): void {
   res.writeHead(status, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
   res.end(JSON.stringify(value));
+}
+function binary(res: any, status: number, value: Buffer, mimeType: string, filename?: string): void {
+  res.writeHead(status, {
+    "content-type": mimeType,
+    "content-length": String(value.length),
+    "cache-control": "private, max-age=31536000, immutable",
+    ...(filename ? { "content-disposition": `inline; filename*=UTF-8''${encodeURIComponent(filename)}` } : {}),
+  });
+  res.end(value);
 }
 async function body(req: any): Promise<any> {
   const parts: Buffer[] = [];
@@ -61,10 +71,12 @@ export class PitchWorkspaceService {
   readonly root: string;
   readonly store: ArtifactStore;
   readonly journal: VersionJournal;
+  readonly assets: ProjectAssetStore;
   constructor(root: string) {
     this.root = resolve(root);
     this.store = new ArtifactStore(this.root);
     this.journal = new VersionJournal(this.root);
+    this.assets = new ProjectAssetStore(this.root);
   }
 
   async state() {
@@ -97,6 +109,9 @@ export class PitchWorkspaceService {
         contentHash: componentHead.contentHash,
       };
     }));
+    const assetItems = await this.assets.list();
+    const assetUsage = await this.assets.usage(deck);
+    const assets = assetItems.map(asset => ({ ...asset, usageCount: assetUsage[asset.id] ?? 0, contentUrl: `/api/assets/${encodeURIComponent(asset.id)}/content` }));
 
     return {
       manifest,
@@ -108,6 +123,7 @@ export class PitchWorkspaceService {
       motionHash: motionHead?.contentHash,
       motionHistory,
       components,
+      assets,
     };
   }
 
@@ -158,6 +174,22 @@ export class PitchWorkspaceService {
     const mutation = createMutation(input.reason ?? "Workspace edit", input.operations, "user", current.deckHash);
     const applied = applyDeckMutation(current.deck, mutation);
     return this.writeDeckVersion({ current, deck: applied.deck, reason: mutation.reason, impact: applied.impact });
+  }
+
+  async importAsset(input: ImportImageAssetInput) {
+    const asset = await this.assets.importImage(input);
+    return { ...(await this.state()), asset, commandReason: `Import asset ${asset.filename}` };
+  }
+
+  async removeAsset(assetId: string) {
+    const current = await this.state();
+    await this.assets.remove(assetId, current.deck);
+    return { ...(await this.state()), removedAssetId: assetId, commandReason: `Remove asset ${assetId}` };
+  }
+
+  async assetContent(assetId: string) {
+    const item = await this.assets.content(assetId);
+    return { metadata: item.metadata, buffer: await readFile(item.path) };
   }
 
   async codexTool(call: PitchCodexToolCall) {
@@ -213,6 +245,7 @@ export class PitchWorkspaceService {
       };
     }
 
+    if (input.command === "insertImage") await this.assets.read(input.assetId);
     const executed = executeEditorCommand(current.deck, input);
     if (!executed.operations.length) {
       return {
@@ -246,6 +279,8 @@ export class PitchWorkspaceService {
   async mediaCommand(input: MediaCommandRequest) {
     const current = await this.state();
     this.assertDeckHash(current, input.expectedDeckHash);
+    const assetId = input.command === "replaceImageAsset" ? input.assetId : input.command === "setImageProperties" ? input.changes.assetId : undefined;
+    if (assetId) await this.assets.read(assetId);
     const result = executeMediaCommand(current.deck, input);
     if (!result.changed) return { ...current, ...result, commandReason: result.reason };
     const next = await this.writeDeckVersion({
@@ -392,7 +427,8 @@ export class PitchWorkspaceService {
     const dir = join(this.root, ".project", "exports");
     await mkdir(dir, { recursive: true });
     const path = join(dir, `${current.deck.id}-v${head.version}.pptx`);
-    const manifest = await exportProductionPptx(current.deck, path, { assets: {} });
+    const assets = await this.assets.richAssetMapForDeck(current.deck);
+    const manifest = await exportProductionPptx(current.deck, path, { assets });
     return { path, manifest };
   }
 }
@@ -407,8 +443,17 @@ export function createWorkspaceServer(projectRoot: string) {
       if (req.method === "GET" && url.pathname === "/workspace.css") { res.writeHead(200, { "content-type": "text/css; charset=utf-8", "cache-control": "no-store" }); res.end(await staticAsset("workspace.css")); return; }
       if (req.method === "GET" && url.pathname === "/workspace.js") { res.writeHead(200, { "content-type": "text/javascript; charset=utf-8", "cache-control": "no-store" }); res.end(await staticAsset("workspace.js")); return; }
       if (req.method === "GET" && url.pathname === "/editor-spike.js") { res.writeHead(200, { "content-type": "text/javascript; charset=utf-8", "cache-control": "no-store" }); res.end(await staticAsset("editor-spike.js")); return; }
+      const assetContent = url.pathname.match(/^\/api\/assets\/([^/]+)\/content$/);
+      if (req.method === "GET" && assetContent) {
+        const item = await service.assetContent(decodeURIComponent(assetContent[1]));
+        binary(res, 200, item.buffer, item.metadata.mimeType, item.metadata.filename);
+        return;
+      }
       if (req.method === "GET" && url.pathname === "/api/project") { json(res, 200, await service.state()); return; }
       if (req.method === "GET" && url.pathname === "/api/codex/tools") { json(res, 200, { tools: pitchCodexToolDefinitions }); return; }
+      if (req.method === "POST" && url.pathname === "/api/assets/import") { json(res, 200, await service.importAsset(await body(req))); return; }
+      const assetDelete = url.pathname.match(/^\/api\/assets\/([^/]+)$/);
+      if (req.method === "DELETE" && assetDelete) { json(res, 200, await service.removeAsset(decodeURIComponent(assetDelete[1]))); return; }
       if (req.method === "POST" && url.pathname === "/api/codex/tool") { json(res, 200, await service.codexTool(await body(req))); return; }
       if (req.method === "POST" && url.pathname === "/api/mutate") { json(res, 200, await service.mutate(await body(req))); return; }
       if (req.method === "POST" && url.pathname === "/api/editor-command") {
