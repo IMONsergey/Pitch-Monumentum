@@ -13,8 +13,10 @@ import { installPitchMotionUI } from "./motion-ui.js";
 import { installPitchMediaUI } from "./media-ui.js";
 import { installPitchComponentsUI } from "./components-ui.js";
 import { installPitchPresenterUI } from "./presenter-ui.js";
+import { installPitchContextPreserver } from "./context-preserver.js";
 import "./client.js";
 
+installPitchContextPreserver();
 installPitchRichTextUI();
 installPitchAutoLayoutUI();
 installPitchProEditorUI();
