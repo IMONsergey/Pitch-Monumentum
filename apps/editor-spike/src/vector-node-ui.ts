@@ -1,7 +1,6 @@
 import type { VectorPathData } from "../../../packages/deck-model/src/index.js";
-import { moveVectorAnchor, vectorAnchors, vectorPathToSvg } from "../../../packages/vector-engine/src/index.js";
-import { moveVectorHandle, replaceVectorPathOperations, type VectorHandleKind } from "../../../packages/vector-engine/src/path-edit.js";
-import { vectorPathBounds } from "../../../packages/vector-engine/src/path-utils.js";
+import { deleteVectorAnchor } from "../../../packages/vector-path/src/edit.js";
+import { moveVectorAnchor, moveVectorHandle, vectorAnchors, vectorPathBounds, vectorPathToSvg } from "../../../packages/vector-path/src/index.js";
 
 type AnyRecord = Record<string, any>;
 type Runtime = {
@@ -9,13 +8,18 @@ type Runtime = {
   getSlide(): AnyRecord | undefined;
   getSelectedIds(): string[];
   select(ids: string[]): void;
-  reload(): Promise<void>;
+  command(input: AnyRecord): Promise<AnyRecord>;
 };
+
+type VectorHandleKind = "in" | "out";
 
 const NS = "http://www.w3.org/2000/svg";
 let editingId: string | null = null;
 let overlay: SVGSVGElement | null = null;
 let workingPath: VectorPathData | null = null;
+let sourceBounds: ReturnType<typeof vectorPathBounds> | null = null;
+let sourceGeometry: AnyRecord | null = null;
+let selectedAnchor: number | null = null;
 let drag: { pointerId: number; commandIndex: number; kind: "anchor" | VectorHandleKind; original: VectorPathData } | null = null;
 
 function runtime(): Runtime | undefined {
@@ -46,19 +50,19 @@ function ensureOverlay(): SVGSVGElement | null {
   return overlay;
 }
 
-function localToSlide(element: AnyRecord, path: VectorPathData, x: number, y: number): { x: number; y: number } {
-  const box = vectorPathBounds(path);
+function localToSlide(x: number, y: number): { x: number; y: number } {
+  if (!sourceBounds || !sourceGeometry) return { x, y };
   return {
-    x: element.geometry.x + ((x - box.left) / box.width) * element.geometry.width,
-    y: element.geometry.y + ((y - box.top) / box.height) * element.geometry.height,
+    x: sourceGeometry.x + ((x - sourceBounds.left) / Math.max(.001, sourceBounds.width)) * sourceGeometry.width,
+    y: sourceGeometry.y + ((y - sourceBounds.top) / Math.max(.001, sourceBounds.height)) * sourceGeometry.height,
   };
 }
 
-function slideToLocal(element: AnyRecord, path: VectorPathData, x: number, y: number): { x: number; y: number } {
-  const box = vectorPathBounds(path);
+function slideToLocal(x: number, y: number): { x: number; y: number } {
+  if (!sourceBounds || !sourceGeometry) return { x, y };
   return {
-    x: box.left + ((x - element.geometry.x) / Math.max(.001, element.geometry.width)) * box.width,
-    y: box.top + ((y - element.geometry.y) / Math.max(.001, element.geometry.height)) * box.height,
+    x: sourceBounds.left + ((x - sourceGeometry.x) / Math.max(.001, sourceGeometry.width)) * sourceBounds.width,
+    y: sourceBounds.top + ((y - sourceGeometry.y) / Math.max(.001, sourceGeometry.height)) * sourceBounds.height,
   };
 }
 
@@ -66,8 +70,8 @@ function pointerToSlide(event: PointerEvent): { x: number; y: number } {
   const stage = document.getElementById("spikeStage")!;
   const rect = stage.getBoundingClientRect();
   return {
-    x: (event.clientX - rect.left) * 1920 / rect.width,
-    y: (event.clientY - rect.top) * 1080 / rect.height,
+    x: (event.clientX - rect.left) * 1920 / Math.max(1, rect.width),
+    y: (event.clientY - rect.top) * 1080 / Math.max(1, rect.height),
   };
 }
 
@@ -88,23 +92,34 @@ function handleLine(x1: number, y1: number, x2: number, y2: number): SVGLineElem
 
 function renderOverlay(): void {
   const svg = ensureOverlay();
-  const element = editableVector();
   if (!svg) return;
   svg.innerHTML = "";
-  if (!element || !workingPath) { svg.style.display = "none"; return; }
+  if (!editingId || !workingPath || !sourceBounds || !sourceGeometry) { svg.style.display = "none"; return; }
   svg.style.display = "block";
+
+  const preview = document.createElementNS(NS, "path");
+  preview.setAttribute("d", vectorPathToSvg(workingPath));
+  preview.setAttribute("fill", "none");
+  preview.setAttribute("stroke", "#335CFF");
+  preview.setAttribute("stroke-width", "2");
+  preview.setAttribute("vector-effect", "non-scaling-stroke");
+  const sx = sourceGeometry.width / Math.max(.001, sourceBounds.width);
+  const sy = sourceGeometry.height / Math.max(.001, sourceBounds.height);
+  preview.setAttribute("transform", `translate(${sourceGeometry.x} ${sourceGeometry.y}) scale(${sx} ${sy}) translate(${-sourceBounds.left} ${-sourceBounds.top})`);
+  svg.appendChild(preview);
+
   for (const anchor of vectorAnchors(workingPath)) {
-    const a = localToSlide(element, workingPath, anchor.x, anchor.y);
+    const a = localToSlide(anchor.x, anchor.y);
     for (const [kind, handle] of [["in", anchor.inHandle], ["out", anchor.outHandle]] as const) {
       if (!handle) continue;
-      const h = localToSlide(element, workingPath, handle.x, handle.y);
+      const h = localToSlide(handle.x, handle.y);
       svg.appendChild(handleLine(a.x, a.y, h.x, h.y));
       const handleNode = circle(h.x, h.y, 5, "#0D0E11", "#4C7DFF");
       handleNode.dataset.commandIndex = String(anchor.commandIndex);
       handleNode.dataset.vectorHandle = kind;
       svg.appendChild(handleNode);
     }
-    const anchorNode = circle(a.x, a.y, 6, "#FFFFFF", "#335CFF");
+    const anchorNode = circle(a.x, a.y, 6, selectedAnchor === anchor.commandIndex ? "#335CFF" : "#FFFFFF", selectedAnchor === anchor.commandIndex ? "#FFFFFF" : "#335CFF");
     anchorNode.dataset.commandIndex = String(anchor.commandIndex);
     anchorNode.dataset.vectorAnchor = "true";
     svg.appendChild(anchorNode);
@@ -124,42 +139,39 @@ function onPointerDown(event: PointerEvent): void {
   const kind = target.dataset.vectorAnchor === "true" ? "anchor" : target.dataset.vectorHandle as VectorHandleKind | undefined;
   if (!kind) return;
   event.preventDefault(); event.stopPropagation();
+  selectedAnchor = index;
   drag = { pointerId: event.pointerId, commandIndex: index, kind, original: structuredClone(workingPath) };
   overlay?.setPointerCapture(event.pointerId);
+  renderOverlay();
   window.addEventListener("pointermove", onPointerMove, true);
   window.addEventListener("pointerup", onPointerUp, true);
   window.addEventListener("pointercancel", onPointerUp, true);
 }
 
 function onPointerMove(event: PointerEvent): void {
-  const element = editableVector();
-  if (!drag || drag.pointerId !== event.pointerId || !element) return;
+  if (!drag || drag.pointerId !== event.pointerId || !workingPath) return;
   const slidePoint = pointerToSlide(event);
-  const local = slideToLocal(element, drag.original, slidePoint.x, slidePoint.y);
+  const local = slideToLocal(slidePoint.x, slidePoint.y);
   workingPath = drag.kind === "anchor"
     ? moveVectorAnchor(drag.original, drag.commandIndex, local.x, local.y, true)
     : moveVectorHandle(drag.original, drag.commandIndex, drag.kind, local.x, local.y);
   previewPath(); renderOverlay();
 }
 
-async function commitVectorPath(): Promise<void> {
+async function commitVectorPath(reason = "Edit vector nodes"): Promise<void> {
   const editor = runtime();
-  const project = editor?.getProject();
-  const slide = editor?.getSlide();
-  if (!editor || !project || !slide || !editingId || !workingPath) return;
-  const operations = replaceVectorPathOperations(slide, editingId, workingPath);
-  const response = await fetch("/api/mutate", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ reason: `Edit vector nodes ${editingId}`, operations, expectedDeckHash: project.deckHash }),
-  });
-  const payload = await response.json();
-  if (!response.ok) throw new Error(payload.error || response.statusText);
-  await editor.reload();
-  editor.select([editingId]);
+  if (!editor || !editingId || !workingPath) return;
+  const id = editingId;
+  await editor.command({ command: "setVectorPath", elementId: id, pathData: workingPath, fitBounds: true });
   const refreshed = editableVector();
-  workingPath = refreshed?.pathData ? structuredClone(refreshed.pathData) : workingPath;
-  renderOverlay();
+  if (refreshed?.pathData && (refreshed.geometry.rotation ?? 0) === 0) {
+    workingPath = structuredClone(refreshed.pathData);
+    sourceBounds = vectorPathBounds(refreshed.pathData);
+    sourceGeometry = structuredClone(refreshed.geometry);
+    editor.select([id]);
+    renderOverlay();
+  } else exit();
+  status(`${reason} · stable ID preserved · one version`);
 }
 
 function onPointerUp(event: PointerEvent): void {
@@ -169,7 +181,7 @@ function onPointerUp(event: PointerEvent): void {
   window.removeEventListener("pointermove", onPointerMove, true);
   window.removeEventListener("pointerup", onPointerUp, true);
   window.removeEventListener("pointercancel", onPointerUp, true);
-  void commitVectorPath().then(() => status("Vector nodes committed · stable ID preserved · one version")).catch(error => status(`Vector edit failed: ${error instanceof Error ? error.message : String(error)}`));
+  void commitVectorPath().catch(error => status(`Vector edit failed: ${error instanceof Error ? error.message : String(error)}`));
 }
 
 function enter(elementId: string): void {
@@ -177,12 +189,22 @@ function enter(elementId: string): void {
   const slide = editor?.getSlide();
   const element = slide?.scene?.find((item: AnyRecord) => item.id === elementId);
   if (!element?.pathData) return;
-  editingId = elementId; workingPath = structuredClone(element.pathData); editor?.select([elementId]);
-  renderOverlay(); status("Edit Vector · drag anchors or Bézier handles · Esc exits");
+  if ((element.geometry.rotation ?? 0) !== 0) {
+    status("Edit Vector · rotated node editing is deferred to Vector Engine v1.1; reset rotation before editing points");
+    return;
+  }
+  editingId = elementId;
+  workingPath = structuredClone(element.pathData);
+  sourceBounds = vectorPathBounds(element.pathData);
+  sourceGeometry = structuredClone(element.geometry);
+  selectedAnchor = null;
+  editor?.select([elementId]);
+  renderOverlay();
+  status("Edit Vector · drag anchors/handles · Delete removes selected anchor · Esc exits");
 }
 
 function exit(): void {
-  editingId = null; workingPath = null; drag = null;
+  editingId = null; workingPath = null; sourceBounds = null; sourceGeometry = null; selectedAnchor = null; drag = null;
   if (overlay) { overlay.innerHTML = ""; overlay.style.display = "none"; }
   status("Select tool");
 }
@@ -192,12 +214,37 @@ export function installPitchVectorNodeUI(): void {
   document.getElementById("spikeScene")?.addEventListener("dblclick", event => {
     const host = (event.target as Element).closest<HTMLElement>(".spike-el[data-id]");
     if (!host) return;
-    const editor = runtime();
-    const element = editor?.getSlide()?.scene?.find((item: AnyRecord) => item.id === host.dataset.id);
+    const element = runtime()?.getSlide()?.scene?.find((item: AnyRecord) => item.id === host.dataset.id);
     if (element?.type === "shape" && element.shape === "custom" && element.pathData) {
       event.preventDefault(); event.stopPropagation(); enter(element.id);
     }
   }, true);
-  window.addEventListener("keydown", event => { if (event.key === "Escape" && editingId) { event.preventDefault(); exit(); } }, true);
-  window.addEventListener("pitch:editor-state", () => { if (editingId) requestAnimationFrame(renderOverlay); });
+  window.addEventListener("keydown", event => {
+    const target = event.target as HTMLElement | null;
+    if (target?.matches("input,textarea,select,[contenteditable=true]")) return;
+    if (event.key === "Escape" && editingId) { event.preventDefault(); exit(); return; }
+    if (event.key === "Enter" && !editingId) {
+      const ids = runtime()?.getSelectedIds() ?? [];
+      const element = ids.length === 1 ? runtime()?.getSlide()?.scene?.find((item: AnyRecord) => item.id === ids[0]) : undefined;
+      if (element?.type === "shape" && element.shape === "custom" && element.pathData) { event.preventDefault(); enter(element.id); }
+      return;
+    }
+    if ((event.key === "Delete" || event.key === "Backspace") && editingId && workingPath && selectedAnchor !== null) {
+      event.preventDefault();
+      try {
+        workingPath = deleteVectorAnchor(workingPath, selectedAnchor);
+        selectedAnchor = null;
+        previewPath(); renderOverlay();
+        void commitVectorPath("Delete vector point").catch(error => status(`Delete point failed: ${error instanceof Error ? error.message : String(error)}`));
+      } catch (error) {
+        status(`Delete point blocked: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+  }, true);
+  window.addEventListener("pitch:editor-state", () => {
+    if (!editingId) return;
+    const element = editableVector();
+    if (!element?.pathData) exit();
+    else requestAnimationFrame(renderOverlay);
+  });
 }
