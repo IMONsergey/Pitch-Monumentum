@@ -1,6 +1,6 @@
 import type { DeckDocument, Geometry, SceneElement, SlideDocument, TextRun } from "../../deck-model/src/index.js";
 import { autoLayoutMutationOperations } from "../../auto-layout/src/index.js";
-import { applyDeckMutation, createMutation, type DeckMutationOperation } from "../../mutations/src/index.js";
+import { applyDeckMutation, createMutation, type DeckMutationOperation, type ElementStylePatch } from "../../mutations/src/index.js";
 import {
   alignSelection,
   arrangeSelection,
@@ -42,7 +42,8 @@ export type EditorCommandInput =
   | { command: "setGeometry"; slideId: string; elementId: string; geometry: Partial<Geometry> }
   | { command: "setPresentation"; slideId: string; elementId: string; changes: PresentationPatch }
   | { command: "setTextStyle"; slideId: string; elementId: string; style: TextStylePatch }
-  | { command: "setInspector"; slideId: string; elementId: string; geometry?: Partial<Geometry>; presentation?: PresentationPatch; textStyle?: TextStylePatch }
+  | { command: "setStyle"; slideId: string; elementId: string; style: ElementStylePatch }
+  | { command: "setInspector"; slideId: string; elementId: string; geometry?: Partial<Geometry>; presentation?: PresentationPatch; textStyle?: TextStylePatch; style?: ElementStylePatch }
   | { command: "insertText"; slideId: string; geometry: Geometry; text?: string }
   | { command: "insertShape"; slideId: string; geometry: Geometry; shape?: "rect" | "roundRect" | "ellipse" | "triangle"; fill?: string }
   | { command: "insertFrame"; slideId: string; geometry: Geometry; fill?: string };
@@ -107,6 +108,25 @@ function presentationPatch(patch: PresentationPatch): PresentationPatch {
   return changes;
 }
 
+function validateStroke(stroke: { color: string; widthDU: number } | null | undefined): void {
+  if (!stroke) return;
+  if (!Number.isFinite(stroke.widthDU) || stroke.widthDU < 0) throw new Error("stroke widthDU must be zero or greater");
+  if (!stroke.color) throw new Error("stroke color is required");
+}
+
+function stylePatch(element: SceneElement, style: ElementStylePatch): ElementStylePatch {
+  if (style.kind !== element.type) throw new Error(`Style kind ${style.kind} does not match ${element.type} element ${element.id}`);
+  if (style.kind === "shape" || style.kind === "frame") {
+    validateStroke(style.stroke);
+    if (style.radiusDU !== undefined && style.radiusDU !== null && (!Number.isFinite(style.radiusDU) || style.radiusDU < 0)) throw new Error("radiusDU must be zero or greater");
+  } else if (style.kind === "image") {
+    if (style.cornerRadiusDU !== undefined && style.cornerRadiusDU !== null && (!Number.isFinite(style.cornerRadiusDU) || style.cornerRadiusDU < 0)) throw new Error("cornerRadiusDU must be zero or greater");
+  } else {
+    validateStroke(style.stroke);
+  }
+  return structuredClone(style);
+}
+
 function styledParagraphs(element: Extract<SceneElement, { type: "text" }>, style: TextStylePatch) {
   if (style.fontSizePt !== undefined && (!Number.isFinite(style.fontSizePt) || style.fontSizePt <= 0)) throw new Error("fontSizePt must be greater than zero");
   if (style.letterSpacingPt !== undefined && !Number.isFinite(style.letterSpacingPt)) throw new Error("letterSpacingPt must be finite");
@@ -161,6 +181,14 @@ function dispatch(slide: SlideDocument, input: Exclude<EditorCommandInput, { com
         affectedAutoLayoutContainerIds: layoutParentIds(slide, input.elementId),
       };
     }
+    case "setStyle": {
+      const element = elementById(slide, input.elementId);
+      return {
+        operations: [{ op: "updateElementStyle", slideId: slide.id, elementId: input.elementId, style: stylePatch(element, input.style) }],
+        nextSelectionIds: [input.elementId],
+        affectedAutoLayoutContainerIds: [],
+      };
+    }
     case "setInspector": {
       const element = elementById(slide, input.elementId);
       const operations: DeckMutationOperation[] = [];
@@ -174,6 +202,9 @@ function dispatch(slide: SlideDocument, input: Exclude<EditorCommandInput, { com
       if (input.textStyle && Object.keys(input.textStyle).length) {
         if (element.type !== "text") throw new Error(`Element ${input.elementId} is not text`);
         operations.push({ op: "replaceText", slideId: slide.id, elementId: input.elementId, paragraphs: styledParagraphs(element, input.textStyle) });
+      }
+      if (input.style) {
+        operations.push({ op: "updateElementStyle", slideId: slide.id, elementId: input.elementId, style: stylePatch(element, input.style) });
       }
       return {
         operations,
@@ -212,6 +243,7 @@ function reasonFor(input: EditorCommandInput): string {
     case "setGeometry": return `Set geometry ${input.elementId}`;
     case "setPresentation": return `Set presentation ${input.elementId}`;
     case "setTextStyle": return `Set text style ${input.elementId}`;
+    case "setStyle": return `Set visual style ${input.elementId}`;
     case "setInspector": return `Apply Inspector ${input.elementId}`;
     case "insertText": return "Insert text";
     case "insertShape": return "Insert shape";
