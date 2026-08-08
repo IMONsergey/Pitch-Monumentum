@@ -1,6 +1,6 @@
-# Pitch Monumentum — current integration order after the large production-core pass
+# Pitch Monumentum — current integration order after the production-core hardening pass
 
-This document supersedes the earlier stack snapshot by extending it through Collaboration, Delivery and Desktop Next.
+This document is the authoritative linear merge order through Collaboration, Delivery and Desktop Full.
 
 ## 0. Frozen release gate — PR #5
 
@@ -89,7 +89,7 @@ Branch: `feat/versions-visual-review`
 - semantic/object/system diff;
 - Versions UI/MCP.
 
-Validation item before merge: restore ancestry must always reflect the checkpoint source branch when restoring from a different currently checked-out branch.
+The cross-branch checkpoint ancestry fix is implemented on the current integration branch: restore uses `checkpoint.sourceBranchId`, keeps exact snapshot `baseHeads`, initializes history from checkpoint heads, and has a regression covering restore while another branch is active. Issue #8 remains the CI/rebase tracking gate until that fix is validated in sequence.
 
 ## 6. Collaboration & Review core
 
@@ -106,52 +106,86 @@ Branch: `feat/collaboration-review`
 - review-sidecar Creative Preview acceptance;
 - Comments UI/MCP.
 
-## 7. Delivery & Interop Center
+## 7. Delivery & Interop Center + Desktop Full
 
 Branch: `feat/delivery-interop-center`
+
+Product version on this branch: `0.3.0-preview.1`.
 
 - unified review/QA/asset preflight;
 - production PPTX surfaced through Delivery Center;
 - editable Figma Bridge document;
-- local Figma importer plugin;
+- local Figma importer plugin with stable Pitch metadata and mixed rich-text range transfer;
 - embedded-assets standalone Web presentation;
+- canonical frame/group DOM hierarchy for Web/PDF/PNG;
+- canonical `duPerInch` typography/spacing;
+- vector `pathData`, gradients and drop shadows in Web delivery;
 - macOS Keynote adapter through installed Keynote;
+- deterministic file/package artifact SHA-256 inspection;
 - Delivery UI/MCP;
-- Desktop Next shell;
-- Electron-native PDF and PNG slide-set renderer;
-- post-stack manual Intel DMG workflow.
+- stable Desktop Runtime + Desktop Full release entrypoint;
+- Electron-native PDF and PNG slide-set renderer using canonical canvas dimensions;
+- one manual Intel Desktop Full DMG workflow.
+
+### Stable product entrypoints
+
+- Full workspace: `apps/workspace/src/full-server.ts`
+- Full MCP: `apps/pitch-mcp-full/src/server.ts`
+- Desktop release entry: `apps/desktop-full/src/main.ts`
+- Desktop implementation: `apps/desktop-runtime/src/main.ts`
+- Full builder: `electron-builder.full.yml`
+- Full package guard: `scripts/package-desktop-full.mjs`
+- Full Intel workflow: `.github/workflows/desktop-full-macos.yml`
+
+Default npm commands now resolve to the Full product surface:
+
+- `npm run workspace`
+- `npm run desktop`
+- `npm run package:mac:x64`
+- `npm run pitch:mcp`
+
+Legacy production-core commands are explicitly named `*:core` and are no longer the default user path.
+
+The temporary Desktop Next packaging configs/scripts/workflow have been deleted. `apps/desktop-next/*` remains only as a compatibility code alias and must not become a release target again.
 
 ### Figma validation gates
 
 - create a development plugin in Figma and use its generated ID;
 - prepare local manifest from `manifest.template.json`;
-- validate rich text fonts, custom vectors, image treatment and hierarchy on real Figma Desktop;
+- validate mixed fonts/styles, custom vectors, image treatment and hierarchy on real Figma Desktop;
 - do not call structured chart/table/diagram fallbacks native parity until their importer expansion is implemented.
 
 ### Keynote validation gates
 
 - run on macOS with installed Keynote;
 - convert a corpus of supported PPTX decks;
+- support either ordinary `.key` files or package-directory output in artifact accounting;
 - inspect native editability/visual parity;
 - retain `adapter-unverified` until that real test succeeds.
 
-### Web validation gates
+### Web/PDF/PNG validation gates
 
 - browser corpus across Chrome/Safari;
 - exact keyframe tracks remain warned/not parity;
-- validate printing before treating print CSS as production PDF equivalent outside Desktop Next.
+- frame/group clipping and nested geometry are now canonical DOM hierarchy but still need browser corpus validation;
+- PDF page size derives from `widthDU/heightDU/duPerInch`;
+- PNG capture derives from canonical width/height rather than 1920×1080 constants;
+- validate real Electron PDF/PNG output before claiming static-delivery parity.
 
-### Desktop Next validation gates
+### Desktop Full validation gate
 
-Authoritative packaging files:
+Tracked in issue #9.
 
-- `electron-builder.next.safe.yml`;
-- `scripts/package-desktop-next-safe.mjs`;
-- `.github/workflows/desktop-next-macos.yml`.
+The manual workflow must prove:
 
-The earlier `electron-builder.next.yml` / non-safe packaging script are superseded drafts because they guessed an Electron version before dependency validation.
-
-Desktop Next must not become the release shell until the linear stack above is merged and independently green.
+1. complete Full build emitted all guarded runtimes;
+2. native `macos-15-intel` job actually ran;
+3. electron-builder produced a DMG;
+4. packaged Mach-O reports `x86_64`;
+5. DMG SHA-256 recorded;
+6. real Intel Mac install/launch smoke test;
+7. full UI controls present;
+8. delivery smoke tests pass.
 
 ## Merge procedure
 
@@ -168,9 +202,7 @@ For every layer:
 
 Do not collapse this stack into one giant unreviewable merge.
 
-## Why the stack is linear
-
-Each milestone intentionally builds canonical infrastructure that the next one consumes:
+## Dependency chain
 
 ```text
 Assets / Motion / Components
@@ -189,7 +221,7 @@ Collaboration / Approval
         ↓
 Delivery / Interop
         ↓
-Desktop Next
+Desktop Runtime / Desktop Full
 ```
 
 This order preserves one source of truth instead of creating parallel editor, AI, review and export document models.
