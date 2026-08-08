@@ -1,0 +1,22 @@
+appId: com.imon.pitchmonumentum
+productName: Pitch Monumentum
+asar: false
+npmRebuild: false
+directories:
+  output: dist-desktop-full
+files:
+  - dist/**/*
+  - apps/workspace/public/**/*
+  - package.json
+extraMetadata:
+  main: dist/apps/desktop-full/src/main.js
+mac:
+  category: public.app-category.productivity
+  target:
+    - target: dmg
+      arch:
+        - x64
+  identity: null
+  hardenedRuntime: false
+  gatekeeperAssess: false
+artifactName: Pitch-Monumentum-${version}-mac-x64.${ext}
