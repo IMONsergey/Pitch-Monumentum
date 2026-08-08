@@ -7,7 +7,7 @@
   "engines": {"node": ">=22"},
   "scripts": {
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "build:editor-spike": "esbuild apps/editor-spike/src/client.ts --bundle --format=iife --platform=browser --target=es2022 --outfile=apps/workspace/public/editor-spike.js",
+    "build:editor-spike": "esbuild apps/editor-spike/src/bootstrap.ts --bundle --format=iife --platform=browser --target=es2022 --outfile=apps/workspace/public/editor-spike.js",
     "build": "tsc -p tsconfig.build.json && npm run build:editor-spike",
     "test": "npm run build && node --test dist/tests/*.test.js",
     "test:editor-e2e": "npm run build && node dist/tests/editor-spike.e2e.js",
