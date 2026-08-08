@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { PitchWorkspaceService } from "../../workspace/src/server.js";
 import { ReviewWorkspaceRuntime } from "../../review/src/runtime.js";
@@ -22,7 +22,10 @@ export interface DeliveryFormatState {
 export interface DeliveryPreflight {
   schemaVersion: "0.1";
   deckId: string;
+  activeBranchId: string;
   deckHash: string;
+  reviewHash?: string;
+  motionHash?: string;
   generatedAt: string;
   reviewGate: ReviewDeliveryGate;
   deterministicCritical: number;
@@ -54,6 +57,9 @@ export interface DeliveryManifest {
   artifacts: DeliveryArtifact[];
 }
 
+type WorkspaceState = Awaited<ReturnType<PitchWorkspaceService["state"]>>;
+type ReviewState = Awaited<ReturnType<ReviewWorkspaceRuntime["state"]>>;
+
 function referencedAssetIds(deck: DeckDocument): string[] {
   const ids = new Set<string>();
   for (const slide of deck.slides) for (const element of slide.scene) {
@@ -63,7 +69,7 @@ function referencedAssetIds(deck: DeckDocument): string[] {
   return [...ids].sort();
 }
 
-function criticalDeterministic(state: Awaited<ReturnType<PitchWorkspaceService["state"]>>): number {
+function criticalDeterministic(state: WorkspaceState): number {
   return state.qa.filter((issue) => issue.severity === "critical").length;
 }
 
@@ -86,6 +92,8 @@ async function fileArtifact(formatName: DeliveryFormat, path: string, warnings: 
   };
 }
 
+function sameOptionalHash(a?: string, b?: string): boolean { return (a ?? "") === (b ?? ""); }
+
 export class DeliveryRuntime {
   readonly root: string;
   readonly service: PitchWorkspaceService;
@@ -102,6 +110,38 @@ export class DeliveryRuntime {
   }
 
   private exportDir(): string { return join(this.root, ".project", "exports"); }
+
+  private async consistentState(): Promise<{ state: WorkspaceState; review: ReviewState }> {
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const before = await this.service.state();
+      const review = await this.review.state();
+      const after = await this.service.state();
+      if (
+        before.manifest.activeBranchId === after.manifest.activeBranchId &&
+        before.deckHash === after.deckHash &&
+        sameOptionalHash(before.motionHash, after.motionHash) &&
+        review.activeBranchId === after.manifest.activeBranchId &&
+        review.deckHash === after.deckHash
+      ) return { state: after, review };
+    }
+    throw new Error("Pitch project changed while Delivery preflight was being prepared; retry against the current project state.");
+  }
+
+  private async assertSnapshot(preflight: DeliveryPreflight): Promise<WorkspaceState> {
+    const { state, review } = await this.consistentState();
+    const problems: string[] = [];
+    if (state.manifest.activeBranchId !== preflight.activeBranchId) problems.push(`branch ${preflight.activeBranchId} → ${state.manifest.activeBranchId}`);
+    if (state.deckHash !== preflight.deckHash) problems.push(`deck ${preflight.deckHash.slice(0, 10)} → ${state.deckHash.slice(0, 10)}`);
+    if (!sameOptionalHash(state.motionHash, preflight.motionHash)) problems.push("motion document changed");
+    if (!sameOptionalHash(review.reviewHash, preflight.reviewHash)) problems.push("review document changed");
+    if (problems.length) throw new Error(`Delivery snapshot is stale: ${problems.join("; ")}. Re-run preflight/export.`);
+    return state;
+  }
+
+  private async removeArtifact(path: string | undefined): Promise<void> {
+    if (!path) return;
+    await rm(path, { recursive: true, force: true }).catch(() => undefined);
+  }
 
   private async assetIntegrity(deck: DeckDocument) {
     const ids = referencedAssetIds(deck);
@@ -127,8 +167,7 @@ export class DeliveryRuntime {
   }
 
   async preflight(policy: ReviewDeliveryPolicy = {}): Promise<DeliveryPreflight> {
-    const state = await this.service.state();
-    const review = await this.review.state();
+    const { state, review } = await this.consistentState();
     const reviewGate = reviewDeliveryGate(state.deck, review.document, policy);
     const integrity = await this.assetIntegrity(state.deck);
     const deterministicCritical = criticalDeterministic(state);
@@ -150,7 +189,10 @@ export class DeliveryRuntime {
     return {
       schemaVersion: "0.1",
       deckId: state.deck.id,
+      activeBranchId: state.manifest.activeBranchId,
       deckHash: state.deckHash,
+      reviewHash: review.reviewHash,
+      motionHash: state.motionHash,
       generatedAt: new Date().toISOString(),
       reviewGate,
       deterministicCritical,
@@ -167,57 +209,128 @@ export class DeliveryRuntime {
     if (!state.ready) throw new Error(`${formatName.toUpperCase()} delivery is blocked: ${state.blockers.join("; ")}`);
   }
 
-  async exportPptx(policy: ReviewDeliveryPolicy = {}): Promise<{ artifact: DeliveryArtifact; preflight: DeliveryPreflight }> {
-    const preflight = await this.preflight(policy); this.assertReady(preflight, "pptx");
-    const result = await this.service.exportPptx();
-    return { artifact: await fileArtifact("pptx", result.path, result.manifest?.warnings ?? preflight.formats.pptx.warnings), preflight };
+  private async generatePptx(preflight: DeliveryPreflight): Promise<DeliveryArtifact> {
+    await this.assertSnapshot(preflight);
+    let path: string | undefined;
+    try {
+      const result = await this.service.exportPptx();
+      path = result.path;
+      await this.assertSnapshot(preflight);
+      return await fileArtifact("pptx", path, result.manifest?.warnings ?? preflight.formats.pptx.warnings);
+    } catch (error) {
+      if (path) await this.removeArtifact(path);
+      throw error;
+    }
   }
 
-  async exportFigma(policy: ReviewDeliveryPolicy = {}): Promise<{ artifact: DeliveryArtifact; preflight: DeliveryPreflight }> {
-    const preflight = await this.preflight(policy); this.assertReady(preflight, "figma");
-    const state = await this.service.state();
+  private async generateFigma(preflight: DeliveryPreflight): Promise<DeliveryArtifact> {
+    const state = await this.assertSnapshot(preflight);
     const assets = await this.bridgeAssets(state.deck);
+    await this.assertSnapshot(preflight);
     const bridge = createFigmaBridgeDocument(state.deck, assets.figma);
     await mkdir(this.exportDir(), { recursive: true });
     const path = join(this.exportDir(), `${state.deck.id}-figma-bridge.json`);
-    await writeFile(path, `${JSON.stringify(bridge, null, 2)}\n`, "utf8");
-    return { artifact: await fileArtifact("figma", path, bridge.warnings), preflight };
+    try {
+      await writeFile(path, `${JSON.stringify(bridge, null, 2)}\n`, "utf8");
+      await this.assertSnapshot(preflight);
+      return await fileArtifact("figma", path, bridge.warnings);
+    } catch (error) {
+      await this.removeArtifact(path);
+      throw error;
+    }
   }
 
-  async exportWeb(policy: ReviewDeliveryPolicy = {}): Promise<{ artifact: DeliveryArtifact; preflight: DeliveryPreflight }> {
-    const preflight = await this.preflight(policy); this.assertReady(preflight, "web");
-    const state = await this.service.state();
+  private async generateWeb(preflight: DeliveryPreflight): Promise<DeliveryArtifact> {
+    const state = await this.assertSnapshot(preflight);
     const assets = await this.bridgeAssets(state.deck);
+    await this.assertSnapshot(preflight);
     const rendered = exportStandaloneWeb(state.deck, assets.web, state.motion);
     await mkdir(this.exportDir(), { recursive: true });
     const path = join(this.exportDir(), `${state.deck.id}-standalone.html`);
-    await writeFile(path, rendered.html, "utf8");
-    return { artifact: await fileArtifact("web", path, rendered.warnings), preflight };
+    try {
+      await writeFile(path, rendered.html, "utf8");
+      await this.assertSnapshot(preflight);
+      return await fileArtifact("web", path, rendered.warnings);
+    } catch (error) {
+      await this.removeArtifact(path);
+      throw error;
+    }
+  }
+
+  private async generateKeynote(preflight: DeliveryPreflight): Promise<{ artifact: DeliveryArtifact; pptxArtifact: DeliveryArtifact }> {
+    await this.assertSnapshot(preflight);
+    let pptxPath: string | undefined;
+    let keyPath: string | undefined;
+    try {
+      const pptx = await this.service.exportPptx();
+      pptxPath = pptx.path;
+      await this.assertSnapshot(preflight);
+      const pptxArtifact = await fileArtifact("pptx", pptx.path, pptx.manifest?.warnings ?? []);
+      const state = await this.assertSnapshot(preflight);
+      keyPath = join(this.exportDir(), `${state.deck.id}.key`);
+      const converted = await convertPptxToKeynote(pptx.path, keyPath, { platform: this.platform, runner: this.keynoteRunner });
+      await this.assertSnapshot(preflight);
+      return { artifact: await fileArtifact("keynote", keyPath, preflight.formats.keynote.warnings, converted.adapterStatus), pptxArtifact };
+    } catch (error) {
+      await this.removeArtifact(keyPath);
+      await this.removeArtifact(pptxPath);
+      throw error;
+    }
+  }
+
+  async exportPptx(policy: ReviewDeliveryPolicy = {}): Promise<{ artifact: DeliveryArtifact; preflight: DeliveryPreflight }> {
+    const preflight = await this.preflight(policy);
+    this.assertReady(preflight, "pptx");
+    return { artifact: await this.generatePptx(preflight), preflight };
+  }
+
+  async exportFigma(policy: ReviewDeliveryPolicy = {}): Promise<{ artifact: DeliveryArtifact; preflight: DeliveryPreflight }> {
+    const preflight = await this.preflight(policy);
+    this.assertReady(preflight, "figma");
+    return { artifact: await this.generateFigma(preflight), preflight };
+  }
+
+  async exportWeb(policy: ReviewDeliveryPolicy = {}): Promise<{ artifact: DeliveryArtifact; preflight: DeliveryPreflight }> {
+    const preflight = await this.preflight(policy);
+    this.assertReady(preflight, "web");
+    return { artifact: await this.generateWeb(preflight), preflight };
   }
 
   async exportKeynote(policy: ReviewDeliveryPolicy = {}): Promise<{ artifact: DeliveryArtifact; pptxArtifact: DeliveryArtifact; preflight: DeliveryPreflight }> {
-    const preflight = await this.preflight(policy); this.assertReady(preflight, "keynote");
-    const pptx = await this.service.exportPptx();
-    const pptxArtifact = await fileArtifact("pptx", pptx.path, pptx.manifest?.warnings ?? []);
-    const state = await this.service.state();
-    const keyPath = join(this.exportDir(), `${state.deck.id}.key`);
-    const converted = await convertPptxToKeynote(pptx.path, keyPath, { platform: this.platform, runner: this.keynoteRunner });
-    return { artifact: await fileArtifact("keynote", keyPath, preflight.formats.keynote.warnings, converted.adapterStatus), pptxArtifact, preflight };
+    const preflight = await this.preflight(policy);
+    this.assertReady(preflight, "keynote");
+    const generated = await this.generateKeynote(preflight);
+    return { ...generated, preflight };
   }
 
   async exportBundle(formats: DeliveryFormat[], policy: ReviewDeliveryPolicy = {}): Promise<DeliveryManifest> {
     const requested = [...new Set(formats)];
+    if (!requested.length) throw new Error("At least one delivery format is required");
+    const preflight = await this.preflight(policy);
+    for (const formatName of requested) this.assertReady(preflight, formatName);
+
     const artifacts: DeliveryArtifact[] = [];
-    let preflight = await this.preflight(policy);
-    for (const formatName of requested) {
-      if (formatName === "pptx") { const result = await this.exportPptx(policy); artifacts.push(result.artifact); preflight = result.preflight; }
-      else if (formatName === "figma") { const result = await this.exportFigma(policy); artifacts.push(result.artifact); preflight = result.preflight; }
-      else if (formatName === "web") { const result = await this.exportWeb(policy); artifacts.push(result.artifact); preflight = result.preflight; }
-      else { const result = await this.exportKeynote(policy); artifacts.push(result.artifact); if (!artifacts.some((artifact) => artifact.path === result.pptxArtifact.path)) artifacts.push(result.pptxArtifact); preflight = result.preflight; }
+    try {
+      for (const formatName of requested) {
+        if (formatName === "pptx") artifacts.push(await this.generatePptx(preflight));
+        else if (formatName === "figma") artifacts.push(await this.generateFigma(preflight));
+        else if (formatName === "web") artifacts.push(await this.generateWeb(preflight));
+        else {
+          const result = await this.generateKeynote(preflight);
+          artifacts.push(result.artifact);
+          if (!artifacts.some((artifact) => artifact.path === result.pptxArtifact.path)) artifacts.push(result.pptxArtifact);
+        }
+      }
+      await this.assertSnapshot(preflight);
+      const manifest: DeliveryManifest = { schemaVersion: "0.1", deckId: preflight.deckId, deckHash: preflight.deckHash, generatedAt: new Date().toISOString(), preflight, artifacts };
+      await mkdir(this.exportDir(), { recursive: true });
+      const manifestPath = join(this.exportDir(), `${preflight.deckId}-delivery-manifest.json`);
+      await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+      await this.assertSnapshot(preflight);
+      return manifest;
+    } catch (error) {
+      await Promise.all(artifacts.map((artifact) => this.removeArtifact(artifact.path)));
+      throw error;
     }
-    const manifest: DeliveryManifest = { schemaVersion: "0.1", deckId: preflight.deckId, deckHash: preflight.deckHash, generatedAt: new Date().toISOString(), preflight, artifacts };
-    await mkdir(this.exportDir(), { recursive: true });
-    await writeFile(join(this.exportDir(), `${preflight.deckId}-delivery-manifest.json`), `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
-    return manifest;
   }
 }
