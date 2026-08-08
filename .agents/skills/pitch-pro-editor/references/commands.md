@@ -25,7 +25,12 @@ Required: `slideId`, `elementId`.
 May atomically include geometry, presentation and text-style patches. Prefer this for exact X/Y/W/H/rotation/opacity/type values.
 
 ### insertText / insertShape / insertFrame
-Create basic editable native scene objects. Use the returned selection IDs rather than guessing generated IDs.
+Create basic editable native scene objects. Use returned selection IDs rather than guessing generated IDs.
+
+### insertImage
+Required: `slideId`, `assetId`, `geometry`.
+Optional: `alt`, `fit`, `name`.
+The `assetId` must already exist in the project Asset Library and should be read from `pitch_project_state`. The command creates a normal editable ImageElement with an asset dependency and deck undo/version semantics.
 
 ## Storyboard commands — `pitch_editor_command`
 
@@ -48,6 +53,10 @@ Required: `slideId`, non-empty `title`.
 
 Use this tool instead of raw image-object edits.
 
+### setImageProperties
+Required: `slideId`, `elementId`, `changes`.
+Atomically updates any supported combination of `fit`, `crop`, `assetId`, `alt`, `cornerRadiusDU` in one deck version. Use this for coherent multi-property image edits.
+
 ### setImageFit
 Required: `slideId`, `elementId`, `fit`.
 Fit values: `cover`, `contain`, `stretch`.
@@ -58,13 +67,11 @@ Crop uses normalized `left`, `top`, `right`, `bottom` values from 0 to <1. Oppos
 
 ### replaceImageAsset
 Required: `slideId`, `elementId`, `assetId`. Optional `alt`.
-Preserves the image object, geometry, dependencies and editability.
+Preserves the image object, geometry and editability. The replacement `assetId` must exist in current project state.
 
 ### setImageCornerRadius
 Required: `slideId`, `elementId`, `cornerRadiusDU`.
 Use `null` to remove the explicit radius.
-
-The visual editor may batch fit/crop/asset/radius into one canonical version; MCP currently exposes the bounded media commands above.
 
 ## Motion — `pitch_motion_command`
 
@@ -100,21 +107,34 @@ Motion history is intentionally independent from deck history. Use these for ani
 
 ## Components — `pitch_component_command`
 
-Component definitions are branch-aware artifacts, not pasted UI templates.
+Component definitions are branch-aware master artifacts. Linked instances expose stable component/instance/source handles in project state.
 
 ### createFromSelection
 Required: `slideId`, `selectedIds`, `name`.
 Optional: `componentId`, `description`.
-The authoring layer closes selected frame/group descendants, localizes geometry and detects text/image/fill/stroke slots.
+The authoring layer closes selected frame/group descendants, localizes geometry, validates the definition and detects text/image/fill/stroke slots.
 
 ### insert
 Required: `slideId`, `componentId`, `transform` (`x`, `y`, optional scaleX/scaleY).
 Optional: `overrides`, `instanceId`.
-Returns the created instance and selection IDs. Re-read state because instance element IDs are new.
+Returns the created linked instance and selection IDs. The instance is placed above existing slide content while preserving the component's internal z-order. Re-read state because instance element IDs are new.
+
+### updateFromSelection
+Required: `slideId`, `selectedIds`, `componentId`.
+Optional: `name`, `description`.
+Turns the selected object tree into the new version of the existing component master and propagates that master to every linked instance. Existing text/image/fill/stroke instance overrides are preserved. Re-read project state because multiple slides and instance element sets may change.
+
+### refreshInstances
+Required: `componentId`.
+Rebuilds all linked instances from the current master without changing the master definition. Current transform and supported slot overrides are preserved. Use after suspected drift or when explicitly asked to sync instances.
+
+### resetInstance
+Required: `componentId`, `instanceId`.
+Rebuilds one linked instance from the current master and clears its local slot overrides. It remains linked.
 
 ### detach
 Required: `slideId`, `instanceId`.
-Removes component linkage tags but keeps the instantiated scene objects editable.
+Removes component linkage/source tags but keeps the instantiated scene objects editable. Detached objects no longer receive master updates.
 
 ## Deck history
 
@@ -123,7 +143,7 @@ Branch-local history for canonical deck versions. Use immediately after an unint
 
 ## State-reading discipline
 
-`pitch_project_state` is intentionally compact for deck objects, while returning canonical motion state and reusable component summaries. Re-read after operations that change IDs, hierarchy, slide order, component instances or history heads.
+`pitch_project_state` is intentionally compact for deck objects while returning canonical motion state, project image assets, component masters and `componentInstances`. Re-read after operations that change IDs, hierarchy, slide order, assets, component masters/instances or history heads.
 
 When a task needs deep text/chart/table/vector data, use the narrow scoped-read capabilities in the active Pitch toolset rather than asking for raw project files.
 
@@ -133,6 +153,6 @@ Do **not** invent these tool calls:
 - custom vector insertion through `pitch_editor_command` (Pen/Pencil engine exists in the editor);
 - chart data editing through this MCP tool family;
 - table structural editing through this MCP tool family;
-- the visual editor's atomic multi-property image batch command.
+- binary asset upload through MCP (assets are currently imported through the Workspace/Desktop asset path, while existing asset IDs can be inserted/replaced through Codex).
 
 Treat the live MCP schema as authoritative even when a lower-level package already exists.
