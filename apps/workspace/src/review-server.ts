@@ -23,7 +23,7 @@ async function body(req: IncomingMessage, limit = 1024 * 1024): Promise<any> {
 }
 
 async function editorBundle(): Promise<string> {
-  const names = ["editor-spike.js", "design-system-ui.js", "slide-masters-ui.js", "creative-director-ui.js", "creative-preview-ui.js", "creative-runs-ui.js", "versions-ui.js", "review-ui.js"];
+  const names = ["editor-spike.js", "design-system-ui.js", "slide-masters-ui.js", "creative-director-ui.js", "creative-preview-ui.js", "creative-runs-ui.js", "versions-ui.js", "review-ui.js", "review-governance-ui.js"];
   const parts = await Promise.all(names.map((name) => readFile(resolve("apps", "workspace", "public", name), "utf8")));
   return `${parts.join("\n;\n")}\n`;
 }
