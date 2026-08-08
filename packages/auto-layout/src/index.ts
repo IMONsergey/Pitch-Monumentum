@@ -127,7 +127,8 @@ export function solveAutoLayout(slide: SlideDocument, containerId: string): Auto
     root.setJustifyContent(justify(layout.justify));
     root.setAlignItems(align(layout.align));
     root.setFlexWrap(layout.wrap ? Wrap.Wrap : Wrap.NoWrap);
-    root.setGap(Gutter.All, layout.gapDU);
+    root.setGap(Gutter.Column, layout.gapDU);
+    root.setGap(Gutter.Row, layout.gapDU);
     root.setPadding(Edge.Top, layout.padding.top);
     root.setPadding(Edge.Right, layout.padding.right);
     root.setPadding(Edge.Bottom, layout.padding.bottom);
@@ -180,11 +181,7 @@ export function autoLayoutMutationOperations(slide: SlideDocument, containerId: 
   return operations;
 }
 
-export function setAutoLayoutMutationOperations(
-  slide: SlideDocument,
-  containerId: string,
-  layout: AutoLayoutSpec,
-): DeckMutationOperation[] {
+export function setAutoLayoutMutationOperations(slide: SlideDocument, containerId: string, layout: AutoLayoutSpec): DeckMutationOperation[] {
   const validation = validateAutoLayoutSpec(layout);
   if (validation.length) throw new Error(validation.join("; "));
   const container = slide.scene.find((element) => element.id === containerId);
