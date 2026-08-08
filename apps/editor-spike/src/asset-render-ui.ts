@@ -8,6 +8,7 @@ const style = `
 
 function runtime(): Runtime | undefined { return (window as any).__pitchEditorRuntime as Runtime | undefined; }
 function assetUrl(assetId: string): string { return `/api/assets/${encodeURIComponent(assetId)}/content`; }
+function clamp(value: number, min = 0, max = 1): number { return Math.max(min, Math.min(max, Number.isFinite(value) ? value : .5)); }
 
 function imageById(elementId: string): AnyRecord | undefined {
   const project = runtime()?.getProject();
@@ -19,8 +20,12 @@ function imageById(elementId: string): AnyRecord | undefined {
   return undefined;
 }
 
+function imageCrop(element: AnyRecord) {
+  return element.crop ?? { left: 0, top: 0, right: 0, bottom: 0 };
+}
+
 function innerImageStyle(element: AnyRecord): string {
-  const crop = element.crop ?? { left: 0, top: 0, right: 0, bottom: 0 };
+  const crop = imageCrop(element);
   const visibleWidth = Math.max(.001, 1 - crop.left - crop.right);
   const visibleHeight = Math.max(.001, 1 - crop.top - crop.bottom);
   const left = -(crop.left / visibleWidth) * 100;
@@ -28,11 +33,34 @@ function innerImageStyle(element: AnyRecord): string {
   const width = 100 / visibleWidth;
   const height = 100 / visibleHeight;
   const fit = element.fit === "stretch" ? "fill" : element.fit || "cover";
-  return `left:${left}%;top:${top}%;width:${width}%;height:${height}%;object-fit:${fit};object-position:center center`;
+  const focal = element.focalPoint ?? { x: .5, y: .5 };
+  const sourceX = clamp(focal.x, crop.left, 1 - crop.right);
+  const sourceY = clamp(focal.y, crop.top, 1 - crop.bottom);
+  const positionX = clamp((sourceX - crop.left) / visibleWidth) * 100;
+  const positionY = clamp((sourceY - crop.top) / visibleHeight) * 100;
+  return `left:${left}%;top:${top}%;width:${width}%;height:${height}%;object-fit:${fit};object-position:${positionX}% ${positionY}%`;
+}
+
+function effectiveClip(element: AnyRecord): "rect" | "roundRect" | "ellipse" {
+  if (element.clipShape === "ellipse" || element.clipShape === "roundRect" || element.clipShape === "rect") return element.clipShape;
+  return (element.cornerRadiusDU ?? 0) > 0 ? "roundRect" : "rect";
+}
+
+function applyClip(node: HTMLElement, element: AnyRecord): void {
+  const clip = effectiveClip(element);
+  node.style.clipPath = "none";
+  if (clip === "ellipse") {
+    node.style.borderRadius = "50%";
+    node.style.clipPath = "ellipse(50% 50% at 50% 50%)";
+  } else if (clip === "roundRect") {
+    node.style.borderRadius = `${Math.max(0, element.cornerRadiusDU ?? 0)}px`;
+  } else {
+    node.style.borderRadius = "0";
+  }
 }
 
 function decorate(node: HTMLElement, element: AnyRecord): void {
-  const marker = `${element.assetId}:${JSON.stringify(element.crop ?? null)}:${element.fit}:${element.cornerRadiusDU ?? 0}`;
+  const marker = `${element.assetId}:${JSON.stringify(element.crop ?? null)}:${JSON.stringify(element.focalPoint ?? null)}:${element.fit}:${element.clipShape ?? "auto"}:${element.cornerRadiusDU ?? 0}`;
   if (node.dataset.pitchAssetMarker === marker) return;
   node.dataset.pitchAssetMarker = marker;
   node.classList.remove("pitch-asset-missing");
@@ -40,7 +68,7 @@ function decorate(node: HTMLElement, element: AnyRecord): void {
   node.style.color = "transparent";
   node.style.display = "block";
   node.style.overflow = "hidden";
-  node.style.borderRadius = `${element.cornerRadiusDU ?? 0}px`;
+  applyClip(node, element);
   const img = document.createElement("img");
   img.className = "pitch-asset-image";
   img.alt = element.alt ?? "";
