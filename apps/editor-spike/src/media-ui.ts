@@ -47,22 +47,20 @@ function render(): void {
     <div class="pitch-field" style="margin-top:7px"><label>Alt text</label><input data-media=alt value="${esc(element.alt || "")}"></div>
     <div class="pitch-media-grid"><div class="pitch-field"><label>Fit</label><select data-media=fit>${["cover","contain","stretch"].map((value) => `<option value="${value}" ${element.fit === value ? "selected" : ""}>${value}</option>`).join("")}</select></div><div class="pitch-field"><label>Radius · DU</label><input data-media=radius type=number min=0 step=1 value="${element.cornerRadiusDU ?? 0}"></div></div>
     <div class="pitch-media-grid"><div class="pitch-field"><label>Crop left · %</label><input data-media=left type=number min=0 max=99 step=.5 value="${crop.left * 100}"></div><div class="pitch-field"><label>Crop top · %</label><input data-media=top type=number min=0 max=99 step=.5 value="${crop.top * 100}"></div><div class="pitch-field"><label>Crop right · %</label><input data-media=right type=number min=0 max=99 step=.5 value="${crop.right * 100}"></div><div class="pitch-field"><label>Crop bottom · %</label><input data-media=bottom type=number min=0 max=99 step=.5 value="${crop.bottom * 100}"></div></div>
-    <div class="pitch-media-actions"><button class="pitch-media-action" data-media-action=apply>Apply media</button><button class="pitch-media-action secondary" data-media-action=reset>Reset crop</button></div>
-    <div class="pitch-inspector-note">Crop values are canonical normalized asset bounds and remain editable across deck versions.</div>`;
+    <div class="pitch-media-actions"><button class="pitch-media-action" data-media-action=apply>Apply · one version</button><button class="pitch-media-action secondary" data-media-action=reset>Reset crop</button></div>
+    <div class="pitch-inspector-note">Fit, asset, radius and normalized crop are committed atomically as one canonical deck version.</div>`;
   panel.appendChild(section);
 
-  section.querySelector("[data-media-action=apply]")?.addEventListener("click", async () => {
+  section.querySelector("[data-media-action=apply]")?.addEventListener("click", () => {
     try {
-      const assetId = (section.querySelector("[data-media=asset]") as HTMLInputElement).value.trim();
-      const alt = (section.querySelector("[data-media=alt]") as HTMLInputElement).value;
-      const fit = (section.querySelector("[data-media=fit]") as HTMLSelectElement).value;
-      const radius = Math.max(0, number(section, "radius"));
-      const nextCrop = { left: number(section, "left") / 100, top: number(section, "top") / 100, right: number(section, "right") / 100, bottom: number(section, "bottom") / 100 };
-      if (assetId !== element.assetId || alt !== (element.alt || "")) await run({ command: "replaceImageAsset", slideId: slide.id, elementId: element.id, assetId, alt });
-      const latest = runtime()?.getProject();
-      await run({ command: "setImageFit", slideId: slide.id, elementId: element.id, fit, expectedDeckHash: latest?.deckHash });
-      await run({ command: "setImageCornerRadius", slideId: slide.id, elementId: element.id, cornerRadiusDU: radius });
-      await run({ command: "setImageCrop", slideId: slide.id, elementId: element.id, crop: nextCrop });
+      const changes = {
+        assetId: (section.querySelector("[data-media=asset]") as HTMLInputElement).value.trim(),
+        alt: (section.querySelector("[data-media=alt]") as HTMLInputElement).value,
+        fit: (section.querySelector("[data-media=fit]") as HTMLSelectElement).value,
+        cornerRadiusDU: Math.max(0, number(section, "radius")),
+        crop: { left: number(section, "left") / 100, top: number(section, "top") / 100, right: number(section, "right") / 100, bottom: number(section, "bottom") / 100 },
+      };
+      void run({ command: "setImageProperties", slideId: slide.id, elementId: element.id, changes });
     } catch (error) { status(`Media failed: ${error instanceof Error ? error.message : String(error)}`); }
   });
   section.querySelector("[data-media-action=reset]")?.addEventListener("click", () => void run({ command: "setImageCrop", slideId: slide.id, elementId: element.id, crop: null }));
